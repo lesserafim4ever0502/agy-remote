@@ -349,6 +349,9 @@ button {
   border-radius: 8px;
   margin: 8px 0;
   overflow: hidden;
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
 }
 .code-header {
   display: flex;
@@ -365,10 +368,21 @@ button {
   margin: 0;
   padding: 8px 10px;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 12px;
   line-height: 1.4;
   color: #d1dcfa;
+}
+.code-block code {
+  display: block;
+  width: max-content;
+  min-width: 100%;
+  box-sizing: border-box;
 }
 .copy-btn {
   background: #172030;
