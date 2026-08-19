@@ -1,0 +1,29 @@
+{
+  "step": {
+    "type": "CORTEX_STEP_TYPE_SYSTEM_MESSAGE",
+    "status": "CORTEX_STEP_STATUS_WAITING",
+    "requestedInteraction": {
+      "askQuestion": {
+        "questions": [
+          {
+            "question": "Which option do you prefer?",
+            "options": [
+              { "optionId": "opt-1", "text": "Option A" },
+              { "optionId": "opt-2", "text": "Option B" }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "responsePayload": {
+    "askQuestion": {
+      "responses": [
+        {
+          "answers": ["Option A"]
+        }
+      ],
+      "cancelled": false
+    }
+  }
+}

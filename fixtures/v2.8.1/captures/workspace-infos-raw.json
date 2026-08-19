@@ -1,0 +1,38 @@
+{
+  "homeDirPath": "C:/test/workspace",
+  "workspaceInfos": [
+    {
+      "workspaceUri": "filC:/test/workspace",
+      "gitRootUri": "filC:/test/workspace"
+    },
+    {
+      "workspaceUri": "filC:/test/workspace"
+    },
+    {
+      "workspaceUri": "filC:/test/workspace"
+    },
+    {
+      "workspaceUri": "filC:/test/workspace"
+    },
+    {
+      "workspaceUri": "filC:/test/workspace"
+    },
+    {
+      "workspaceUri": "filC:/test/workspace"
+    },
+    {
+      "workspaceUri": "filC:/test/workspace"
+    },
+    {
+      "workspaceUri": "filC:/test/workspace"
+    },
+    {
+      "workspaceUri": "filC:/test/workspace"
+    },
+    {
+      "workspaceUri": "filC:/test/workspace"
+    }
+  ],
+  "homeDirUri": "filC:/test/workspace",
+  "geminiDirUri": "filC:/test/workspace"
+}

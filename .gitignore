@@ -1,0 +1,9 @@
+.DS_Store
+.env
+*.log
+*.pid
+node_modules/
+coverage/
+.agy-remote/
+*.bak
+

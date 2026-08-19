@@ -1,0 +1,20 @@
+{
+  "step": {
+    "type": "CORTEX_STEP_TYPE_RUN_COMMAND",
+    "status": "CORTEX_STEP_STATUS_WAITING",
+    "requestedInteraction": {
+      "runCommand": {
+        "proposedCommandLine": "echo original",
+        "submittedCommandLine": "echo original"
+      }
+    }
+  },
+  "responsePayload": {
+    "runCommand": {
+      "confirm": true,
+      "proposedCommandLine": "echo original",
+      "submittedCommandLine": "echo edited_command",
+      "sandboxOverride": false
+    }
+  }
+}

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1020" />
+  <title>Agy Remote</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="orb"></span><div><strong>Agy Remote</strong><small id="statusText">connecting…</small></div></div>
+    <div>
+      <button id="notifyBtn" class="ghost" title="Enable Push Notifications">🔔</button>
+      <button id="tokenBtn" class="ghost">Token</button>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="agent">Agent</button>
+    <button class="tab" data-tab="terminal">Terminal</button>
+    <button class="tab" data-tab="browser">Browser</button>
+  </nav>
+
+  <main>
+    <section id="agentTab" class="panel tab-panel active">
+      <aside class="sidebar">
+        <div class="section-head"><h2>Conversations</h2><button id="refreshConversations" class="icon-btn">↻</button></div>
+        <div class="create-row">
+          <select id="workspaceSelect"><option value="">Current workspace</option></select>
+          <button id="newConversation">＋</button>
+        </div>
+        <div id="conversationList" class="list"></div>
+      </aside>
+      <section class="content">
+        <div id="conversationHeader" class="content-head"><div><h2>Select a conversation</h2><small>Live state comes from StreamAgentStateUpdates</small></div><button id="stopBtn" class="danger" disabled>Stop</button></div>
+        <div id="timeline" class="timeline empty">No conversation selected.</div>
+        <form id="composer" class="composer">
+          <select id="modelSelect"><option value="">Default model</option></select>
+          <textarea id="promptInput" rows="2" placeholder="Send a prompt…" disabled></textarea>
+          <button id="sendBtn" disabled>Send</button>
+        </form>
+      </section>
+    </section>
+
+    <section id="terminalTab" class="panel tab-panel">
+      <div class="single-column">
+        <div class="section-head"><h2>Integrated Terminal</h2><div><button id="clearTerminal" class="ghost">Clear</button><button id="interruptTerminal" class="ghost">Ctrl+C</button><button id="listTerminals" class="ghost">Refresh</button><button id="createTerminal">New</button></div></div>
+        <div id="terminalList" class="chips"></div>
+        <pre id="terminalOutput" class="terminal">Select or create a terminal.</pre>
+        <form id="terminalForm" class="terminal-input"><input id="terminalInput" autocomplete="off" placeholder="terminal input" /><button>Send</button></form>
+      </div>
+    </section>
+
+    <section id="browserTab" class="panel tab-panel">
+      <div class="single-column">
+        <div class="section-head"><h2>Browser</h2><div><button id="captureConsole" class="ghost">Console Logs</button><button id="refreshPages" class="ghost">Refresh pages</button></div></div>
+        <form id="openUrlForm" class="open-url"><input id="openUrlInput" placeholder="https://…" /><button>Open</button></form>
+        <div id="pageList" class="list page-list"></div>
+        <div id="browserPreview" class="browser-preview"><div class="empty">Select a page and capture a screenshot.</div></div>
+        <pre id="browserConsole" class="terminal" style="display:none;height:180px;margin-top:12px;"></pre>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,37 @@
+{
+  "defaultOverrideModelConfig": {
+    "modelOrAlias": {
+      "model": "MODEL_PLACEHOLDER_M298"
+    }
+  },
+  "clientModelConfigs": [
+    {
+      "label": "Gemini 3.6 Flash (High)",
+      "modelOrAlias": {
+        "model": "MODEL_PLACEHOLDER_M71"
+      },
+      "supportsImages": true,
+      "isRecommended": true,
+      "quotaInfo": {
+        "remainingFraction": 0.85,
+        "resetTime": "2026-08-19T12:00:00Z"
+      },
+      "tagTitle": "Fast",
+      "modelId": "gemini-3.6-flash-high"
+    },
+    {
+      "label": "Gemini 3.1 Pro (Low)",
+      "modelOrAlias": {
+        "model": "MODEL_PLACEHOLDER_M36"
+      },
+      "supportsImages": true,
+      "isRecommended": true,
+      "quotaInfo": {
+        "remainingFraction": 0.9,
+        "resetTime": "2026-08-19T12:00:00Z"
+      },
+      "tagTitle": "Pro",
+      "modelId": "gemini-3.1-pro-low"
+    }
+  ]
+}

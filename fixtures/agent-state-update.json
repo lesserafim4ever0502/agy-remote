@@ -1,0 +1,17 @@
+{
+  "update": {
+    "conversationId": "demo",
+    "trajectoryId": "traj-demo",
+    "status": "CASCADE_RUN_STATUS_RUNNING",
+    "mainTrajectoryUpdate": {
+      "stepsUpdate": {
+        "indices": [0, 1],
+        "totalLength": 2,
+        "steps": [
+          { "type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE", "userInput": { "items": [{ "text": "hello" }] } },
+          { "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_GENERATING", "plannerResponse": { "modifiedResponse": "Hi…", "thinking": "not projected" } }
+        ]
+      }
+    }
+  }
+}

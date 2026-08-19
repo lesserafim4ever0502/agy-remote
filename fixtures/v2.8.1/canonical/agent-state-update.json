@@ -1,0 +1,40 @@
+{
+  "update": {
+    "conversationId": "conv-demo-uuid",
+    "trajectoryId": "traj-demo-uuid",
+    "status": "CASCADE_RUN_STATUS_RUNNING",
+    "mainTrajectoryUpdate": {
+      "stepsUpdate": {
+        "indices": [0, 1, 2],
+        "totalLength": 3,
+        "steps": [
+          {
+            "type": "CORTEX_STEP_TYPE_USER_INPUT",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "userInput": {
+              "items": [{ "text": "Inspect the project" }]
+            }
+          },
+          {
+            "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "plannerResponse": {
+              "response": "Starting analysis...",
+              "modifiedResponse": "Starting analysis..."
+            }
+          },
+          {
+            "type": "CORTEX_STEP_TYPE_RUN_COMMAND",
+            "status": "CORTEX_STEP_STATUS_WAITING",
+            "requestedInteraction": {
+              "runCommand": {
+                "proposedCommandLine": "echo test",
+                "submittedCommandLine": "echo test"
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
