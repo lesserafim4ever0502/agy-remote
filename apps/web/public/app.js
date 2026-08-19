@@ -609,7 +609,7 @@ async function loadConversations(){
     $('#conversationList').innerHTML=d.conversations.map(c=>`<div class="conversation ${c.id===state.conversationId?'active':''}" data-id="${escapeHtml(c.id)}"><strong>${escapeHtml(c.title)}</strong><small><span><i class="status-dot ${c.status}"></i>${escapeHtml(c.status)}</span><span>${c.stepCount} steps</span></small></div>`).join('');
     $$('.conversation').forEach(el=>el.onclick=()=>{
       openConversation(el.dataset.id);
-      $('#agentSidebar').classList.remove('drawer-open');
+      toggleDrawer(false);
     });
   }catch(e){
     toast(e.message);
@@ -623,7 +623,8 @@ async function openConversation(id){
     state.events.clear();
     const d=await api(`/api/v1/conversations/${encodeURIComponent(id)}`);
     for(const e of d.events||[])state.events.set(eventKey(e),e);
-    $('#conversationHeader h2').textContent=id.slice(0,12);
+    $('#convTitle').textContent=id.slice(0,12);
+    $('#convSub').textContent=`Live state · ${(d.events||[]).length} events`;
     $('#promptInput').disabled=false;
     $('#sendBtn').disabled=false;
     renderTimeline();
@@ -656,9 +657,15 @@ function selectTerminal(tid){
   loadTerminals();
 }
 
+function toggleDrawer(open){
+  const willOpen=typeof open==='boolean'?open:!document.body.classList.contains('drawer-active');
+  document.body.classList.toggle('drawer-active',willOpen);
+}
+
 // Drawer and Mobile Layout Controls
-$('#drawerBtn').onclick=()=>$('#agentSidebar').classList.toggle('drawer-open');
-$('#closeDrawerBtn').onclick=()=>$('#agentSidebar').classList.remove('drawer-open');
+$('#drawerBtn').onclick=()=>toggleDrawer();
+$('#closeDrawerBtn').onclick=()=>toggleDrawer(false);
+$('#drawerBackdrop').onclick=()=>toggleDrawer(false);
 
 $$('.tab').forEach(btn=>btn.onclick=()=>{
   $$('.tab').forEach(x=>x.classList.toggle('active',x===btn));

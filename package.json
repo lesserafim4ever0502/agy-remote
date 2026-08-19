@@ -21,5 +21,8 @@
   "dependencies": {
     "qrcode": "^1.5.4",
     "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.62.1"
   }
 }

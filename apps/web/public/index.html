@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no" />
   <meta name="theme-color" content="#0b1020" />
   <title>Agy Remote</title>
   <link rel="manifest" href="/manifest.webmanifest" />
@@ -10,76 +10,126 @@
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <button id="drawerBtn" class="icon-btn mobile-only" title="Toggle Conversations">☰</button>
-      <span class="orb"></span>
-      <div><strong>Agy Remote</strong><small id="statusText">connecting…</small></div>
-    </div>
-    <div>
-      <button id="notifyBtn" class="ghost" title="Enable Push Notifications">🔔</button>
-      <button id="tokenBtn" class="ghost">Token</button>
-    </div>
-  </header>
+  <div id="drawerBackdrop" class="drawer-backdrop"></div>
 
-  <nav class="tabs">
-    <button class="tab active" data-tab="agent">Agent</button>
-    <button class="tab" data-tab="terminal">Terminal</button>
-    <button class="tab" data-tab="browser">Browser</button>
-  </nav>
+  <!-- Sidebar / Drawer for Desktop & Mobile -->
+  <aside id="agentSidebar" class="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-title">
+        <span class="orb-sm"></span>
+        <h2>Conversations</h2>
+      </div>
+      <div class="sidebar-actions">
+        <button id="refreshConversations" class="icon-btn" title="Refresh">↻</button>
+        <button id="closeDrawerBtn" class="icon-btn mobile-only" title="Close">✕</button>
+      </div>
+    </div>
+    <div class="workspace-bar">
+      <select id="workspaceSelect" title="Select Workspace"><option value="">Current workspace</option></select>
+      <button id="newConversation" class="primary-btn" title="New Conversation">＋ New</button>
+    </div>
+    <div id="conversationList" class="list conversation-list"></div>
+  </aside>
 
-  <main>
-    <section id="agentTab" class="panel tab-panel active">
-      <aside id="agentSidebar" class="sidebar">
-        <div class="section-head"><h2>Conversations</h2><div><button id="closeDrawerBtn" class="icon-btn mobile-only">✕</button><button id="refreshConversations" class="icon-btn">↻</button></div></div>
-        <div class="create-row">
-          <select id="workspaceSelect"><option value="">Current workspace</option></select>
-          <button id="newConversation">＋</button>
+  <!-- Main App Shell -->
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <button id="drawerBtn" class="icon-btn mobile-only" title="Open Conversations">☰</button>
+        <span class="orb"></span>
+        <div>
+          <strong>Agy Remote</strong>
+          <small id="statusText">connecting…</small>
         </div>
-        <div id="conversationList" class="list"></div>
-      </aside>
-      <section class="content">
-        <div id="conversationHeader" class="content-head"><div><h2>Select a conversation</h2><small>Live state comes from StreamAgentStateUpdates</small></div><button id="stopBtn" class="danger" disabled>Stop</button></div>
-        <div id="timeline" class="timeline empty">No conversation selected.</div>
-        <form id="composer" class="composer">
-          <div class="model-bar">
-            <select id="baseModelSelect"><option value="">Default model</option></select>
-            <div class="thinking-selector" id="thinkingSelector">
-              <span class="thinking-label">🧠</span>
-              <div class="segmented-control" id="thinkingSegmented">
-                <button type="button" class="seg-btn" data-val="low">Low</button>
-                <button type="button" class="seg-btn" data-val="medium">Med</button>
-                <button type="button" class="seg-btn active" data-val="high">High</button>
+      </div>
+      <div class="topbar-actions">
+        <button id="notifyBtn" class="icon-btn" title="Push Notifications">🔔</button>
+        <button id="tokenBtn" class="ghost-btn">Token</button>
+      </div>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab active" data-tab="agent">💬 Agent</button>
+      <button class="tab" data-tab="terminal">💻 Terminal</button>
+      <button class="tab" data-tab="browser">🌐 Browser</button>
+    </nav>
+
+    <main class="main-content">
+      <!-- Agent Tab -->
+      <section id="agentTab" class="tab-panel active">
+        <div class="agent-view">
+          <div id="conversationHeader" class="content-head">
+            <div class="head-info">
+              <h2 id="convTitle">Select a conversation</h2>
+              <small id="convSub">Live from StreamAgentStateUpdates</small>
+            </div>
+            <button id="stopBtn" class="danger-btn" disabled>Stop</button>
+          </div>
+          <div id="timeline" class="timeline empty">No conversation selected. Tap ☰ to pick or create one.</div>
+          <form id="composer" class="composer">
+            <div class="model-bar">
+              <select id="baseModelSelect"><option value="">Default model</option></select>
+              <div class="thinking-selector" id="thinkingSelector">
+                <span class="thinking-icon" title="Thinking Budget">🧠</span>
+                <div class="segmented-control" id="thinkingSegmented">
+                  <button type="button" class="seg-btn" data-val="low">Low</button>
+                  <button type="button" class="seg-btn" data-val="medium">Med</button>
+                  <button type="button" class="seg-btn active" data-val="high">High</button>
+                </div>
               </div>
             </div>
-          </div>
-          <div class="composer-input-row">
-            <textarea id="promptInput" rows="2" placeholder="Send a prompt…" disabled></textarea>
-            <button id="sendBtn" disabled>Send</button>
-          </div>
-        </form>
+            <div class="composer-input-row">
+              <textarea id="promptInput" rows="1" placeholder="Send a prompt to Antigravity…" disabled></textarea>
+              <button id="sendBtn" class="primary-btn" disabled>Send</button>
+            </div>
+          </form>
+        </div>
       </section>
-    </section>
 
-    <section id="terminalTab" class="panel tab-panel">
-      <div class="single-column">
-        <div class="section-head"><h2>Integrated Terminal</h2><div><button id="clearTerminal" class="ghost">Clear</button><button id="interruptTerminal" class="ghost">Ctrl+C</button><button id="listTerminals" class="ghost">Refresh</button><button id="createTerminal">New</button></div></div>
-        <div id="terminalList" class="chips"></div>
-        <pre id="terminalOutput" class="terminal">Select or create a terminal.</pre>
-        <form id="terminalForm" class="terminal-input"><input id="terminalInput" autocomplete="off" placeholder="terminal input" /><button>Send</button></form>
-      </div>
-    </section>
+      <!-- Terminal Tab -->
+      <section id="terminalTab" class="tab-panel">
+        <div class="terminal-view">
+          <div class="panel-toolbar">
+            <div class="panel-title"><h3>Integrated Terminal</h3></div>
+            <div class="toolbar-actions">
+              <button id="createTerminal" class="primary-btn-sm">＋ New</button>
+              <button id="interruptTerminal" class="ghost-btn-sm danger-text">Ctrl+C</button>
+              <button id="clearTerminal" class="ghost-btn-sm">Clear</button>
+              <button id="listTerminals" class="icon-btn-sm">↻</button>
+            </div>
+          </div>
+          <div id="terminalList" class="chips terminal-chips"></div>
+          <pre id="terminalOutput" class="terminal-screen">Select or create a terminal.</pre>
+          <form id="terminalForm" class="terminal-input-bar">
+            <input id="terminalInput" autocomplete="off" placeholder="Run command in remote terminal…" />
+            <button class="primary-btn">Send</button>
+          </form>
+        </div>
+      </section>
 
-    <section id="browserTab" class="panel tab-panel">
-      <div class="single-column">
-        <div class="section-head"><h2>Browser</h2><div><button id="captureConsole" class="ghost">Console Logs</button><button id="refreshPages" class="ghost">Refresh pages</button></div></div>
-        <form id="openUrlForm" class="open-url"><input id="openUrlInput" placeholder="https://…" /><button>Open</button></form>
-        <div id="pageList" class="list page-list"></div>
-        <div id="browserPreview" class="browser-preview"><div class="empty">Select a page and capture a screenshot.</div></div>
-        <pre id="browserConsole" class="terminal" style="display:none;height:180px;margin-top:12px;"></pre>
-      </div>
-    </section>
-  </main>
+      <!-- Browser Tab -->
+      <section id="browserTab" class="tab-panel">
+        <div class="browser-view">
+          <div class="panel-toolbar">
+            <div class="panel-title"><h3>Remote Browser</h3></div>
+            <div class="toolbar-actions">
+              <button id="captureConsole" class="ghost-btn-sm">Console</button>
+              <button id="refreshPages" class="icon-btn-sm">↻</button>
+            </div>
+          </div>
+          <form id="openUrlForm" class="open-url-bar">
+            <input id="openUrlInput" type="url" placeholder="https://example.com" />
+            <button class="primary-btn">Open</button>
+          </form>
+          <div id="pageList" class="page-chips"></div>
+          <div id="browserPreview" class="browser-preview">
+            <div class="empty">No page active. Open a URL or test with Agent.</div>
+          </div>
+          <pre id="browserConsole" class="browser-console" style="display:none;"></pre>
+        </div>
+      </section>
+    </main>
+  </div>
 
   <div id="toast" class="toast"></div>
   <script type="module" src="/app.js"></script>
