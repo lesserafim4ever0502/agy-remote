@@ -11,7 +11,11 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="orb"></span><div><strong>Agy Remote</strong><small id="statusText">connecting…</small></div></div>
+    <div class="brand">
+      <button id="drawerBtn" class="icon-btn mobile-only" title="Toggle Conversations">☰</button>
+      <span class="orb"></span>
+      <div><strong>Agy Remote</strong><small id="statusText">connecting…</small></div>
+    </div>
     <div>
       <button id="notifyBtn" class="ghost" title="Enable Push Notifications">🔔</button>
       <button id="tokenBtn" class="ghost">Token</button>
@@ -26,8 +30,8 @@
 
   <main>
     <section id="agentTab" class="panel tab-panel active">
-      <aside class="sidebar">
-        <div class="section-head"><h2>Conversations</h2><button id="refreshConversations" class="icon-btn">↻</button></div>
+      <aside id="agentSidebar" class="sidebar">
+        <div class="section-head"><h2>Conversations</h2><div><button id="closeDrawerBtn" class="icon-btn mobile-only">✕</button><button id="refreshConversations" class="icon-btn">↻</button></div></div>
         <div class="create-row">
           <select id="workspaceSelect"><option value="">Current workspace</option></select>
           <button id="newConversation">＋</button>
@@ -38,9 +42,21 @@
         <div id="conversationHeader" class="content-head"><div><h2>Select a conversation</h2><small>Live state comes from StreamAgentStateUpdates</small></div><button id="stopBtn" class="danger" disabled>Stop</button></div>
         <div id="timeline" class="timeline empty">No conversation selected.</div>
         <form id="composer" class="composer">
-          <select id="modelSelect"><option value="">Default model</option></select>
-          <textarea id="promptInput" rows="2" placeholder="Send a prompt…" disabled></textarea>
-          <button id="sendBtn" disabled>Send</button>
+          <div class="model-bar">
+            <select id="baseModelSelect"><option value="">Default model</option></select>
+            <div class="thinking-selector" id="thinkingSelector">
+              <span class="thinking-label">🧠</span>
+              <div class="segmented-control" id="thinkingSegmented">
+                <button type="button" class="seg-btn" data-val="low">Low</button>
+                <button type="button" class="seg-btn" data-val="medium">Med</button>
+                <button type="button" class="seg-btn active" data-val="high">High</button>
+              </div>
+            </div>
+          </div>
+          <div class="composer-input-row">
+            <textarea id="promptInput" rows="2" placeholder="Send a prompt…" disabled></textarea>
+            <button id="sendBtn" disabled>Send</button>
+          </div>
         </form>
       </section>
     </section>

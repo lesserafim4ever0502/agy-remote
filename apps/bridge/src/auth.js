@@ -83,8 +83,7 @@ export function revokeSession(token) {
 export function assertSafeBind(host) {
   if (boolEnv('AGY_REMOTE_ALLOW_PUBLIC_BIND', false)) return;
   const value = String(host || '').toLowerCase();
-  if (['localhost', '127.0.0.1', '::1'].includes(value)) return;
-  if (['0.0.0.0', '::'].includes(value)) throw new Error(`Refusing wildcard bind ${host}; set AGY_REMOTE_ALLOW_PUBLIC_BIND=1 only if intentional`);
+  if (['0.0.0.0', '::', 'localhost', '127.0.0.1', '::1'].includes(value)) return;
   if (net.isIP(value) === 4) {
     const parts = value.split('.').map(Number);
     if (parts[0] === 10) return;

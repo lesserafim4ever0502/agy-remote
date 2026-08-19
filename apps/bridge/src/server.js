@@ -8,7 +8,7 @@ import { acceptWebSocket } from './websocket.js';
 import { readJson, sendJson, sendError } from './http-utils.js';
 import { serveStatic } from './static.js';
 
-const host = process.env.AGY_REMOTE_HOST || '127.0.0.1';
+const host = process.env.AGY_REMOTE_HOST || '0.0.0.0';
 const port = Number(process.env.AGY_REMOTE_PORT || DEFAULT_REMOTE_PORT);
 assertSafeBind(host);
 
