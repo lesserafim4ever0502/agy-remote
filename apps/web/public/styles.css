@@ -370,7 +370,7 @@ button {
 }
 /* Codex Step Rows (Clean, minimal, high-fidelity) */
 .activity-row {
-  margin: 3px 0;
+  margin: 1px 0;
   border-radius: 6px;
   background: transparent;
   border: 1px solid transparent;
@@ -379,6 +379,9 @@ button {
   min-width: 0;
   box-sizing: border-box;
   transition: background 0.15s, border-color 0.15s;
+}
+.timeline > .activity-row + .activity-row {
+  margin-top: -11px;
 }
 .activity-row:hover {
   background: rgba(255, 255, 255, 0.035);
@@ -392,17 +395,17 @@ button {
   display: flex;
   width: 100%;
   align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
+  gap: 6px;
+  padding: 3px 6px;
   cursor: pointer;
   user-select: none;
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 12.5px;
+  line-height: 1.4;
   color: #a0abbd;
-  min-height: 30px;
+  min-height: 26px;
   box-sizing: border-box;
   border: 0;
-  border-radius: 6px;
+  border-radius: 4px;
   background: transparent;
   text-align: left;
 }
@@ -412,12 +415,12 @@ button {
 .activity-summary::before {
   content: '›';
   display: inline-block;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
-  color: #55667e;
+  color: #4b5a6f;
   transform: rotate(0deg);
   transition: transform 0.15s ease;
-  width: 8px;
+  width: 6px;
   flex-shrink: 0;
 }
 .activity-row.expanded > .activity-summary::before {
