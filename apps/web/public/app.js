@@ -822,7 +822,26 @@ $('#newConversation').onclick=async()=>{
 $('#composer').onsubmit=async(e)=>{
   e.preventDefault();
   const text=$('#promptInput').value.trim();
-  if(!text||!state.conversationId)return;
+  if(!text)return;
+
+  // Auto-create conversation if none is selected
+  if(!state.conversationId){
+    try{
+      const d=await api('/api/v1/conversations',{
+        method:'POST',
+        body:{
+          workspaceUri:$('#workspaceSelect')?.value||undefined,
+          model:getSelectedModel()
+        }
+      });
+      await loadConversations();
+      await openConversation(d.cascadeId);
+    }catch(err){
+      toast(`Failed to create conversation: ${err.message}`);
+      return;
+    }
+  }
+
   $('#promptInput').value='';
   try{
     await api(`/api/v1/conversations/${encodeURIComponent(state.conversationId)}/messages`,{
@@ -833,6 +852,13 @@ $('#composer').onsubmit=async(e)=>{
     toast(err.message);
   }
 };
+
+$('#promptInput').addEventListener('keydown',(e)=>{
+  if(e.key==='Enter'&&!e.shiftKey){
+    e.preventDefault();
+    $('#composer').requestSubmit();
+  }
+});
 
 $('#stopBtn').onclick=()=>state.conversationId&&api(`/api/v1/conversations/${encodeURIComponent(state.conversationId)}/stop`,{method:'POST'}).catch(e=>toast(e.message));
 

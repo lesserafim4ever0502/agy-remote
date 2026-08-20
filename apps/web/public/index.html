@@ -68,7 +68,7 @@
           <div id="timeline" class="timeline empty">No conversation selected. Tap ☰ to pick or create one.</div>
           <form id="composer" class="composer">
             <div class="model-bar">
-              <select id="baseModelSelect"><option value="">Default model</option></select>
+              <select id="baseModelSelect" title="Select Model"><option value="">Default model</option></select>
               <div class="thinking-selector" id="thinkingSelector">
                 <span class="thinking-icon" title="Thinking Budget">🧠</span>
                 <div class="segmented-control" id="thinkingSegmented">
@@ -79,8 +79,8 @@
               </div>
             </div>
             <div class="composer-input-row">
-              <textarea id="promptInput" rows="1" placeholder="Send a prompt to Antigravity…" disabled></textarea>
-              <button id="sendBtn" class="primary-btn" disabled>Send</button>
+              <textarea id="promptInput" rows="1" placeholder="Type a message or prompt…"></textarea>
+              <button id="sendBtn" class="send-btn" type="submit">Send</button>
             </div>
           </form>
         </div>
