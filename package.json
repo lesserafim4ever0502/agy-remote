@@ -7,6 +7,10 @@
   "scripts": {
     "start": "node apps/bridge/src/server.js",
     "dev": "node --watch apps/bridge/src/server.js",
+    "remote:setup": "node scripts/remote-setup.mjs",
+    "remote:start": "powershell -ExecutionPolicy Bypass -File scripts/start-background.ps1",
+    "remote:status": "node scripts/doctor.mjs",
+    "remote:stop": "powershell -ExecutionPolicy Bypass -File scripts/stop-background.ps1",
     "test": "node --test tests/*.test.js",
     "smoke": "node scripts/smoke.mjs",
     "doctor": "node scripts/doctor.mjs",

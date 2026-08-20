@@ -1,5 +1,6 @@
 import path from "node:path";
 import { chromium } from "playwright-core";
+import { createPairingSecret } from "../apps/bridge/src/auth.js";
 
 const edgePath = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
 const artifactDir = "C:/Users/ljr13/.gemini/antigravity/brain/fdf60586-ca07-4bdd-98a4-eca84f483a63";
@@ -17,9 +18,9 @@ const context = await browser.newContext({
 });
 
 const page = await context.newPage();
-const token = "3dcf18543d15be3120ac5cdcc32652a796e4fe3c0d5d4cb6f9afee68cfef8b99";
+const { secret } = createPairingSecret();
 
-await page.goto(`http://127.0.0.1:7317/#token=${token}`, { waitUntil: "networkidle" });
+await page.goto(`http://127.0.0.1:7317/#pair=${secret}`, { waitUntil: "networkidle" });
 await page.waitForTimeout(1000);
 
 // 1. Capture Agent Tab

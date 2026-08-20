@@ -29,28 +29,16 @@ async function checkPairing(){
           state.token=data.token;
           localStorage.setItem('agyToken',data.token);
           try{history.replaceState(null,'',window.location.pathname);}catch{}
-          setTimeout(()=>toast('Paired successfully! Device session created.'),400);
-          connectWs();
-          loadStatus();
-          loadConversations();
-          return;
+          toast('Paired successfully! Device session created.');
+          return true;
         }
       }catch(err){
         toast(`Pairing failed: ${err.message}`);
       }
     }
   }
-  if(window.location.hash.startsWith('#token=')){
-    const hashToken=window.location.hash.slice(7).trim();
-    if(hashToken){
-      state.token=hashToken;
-      localStorage.setItem('agyToken',hashToken);
-      try{history.replaceState(null,'',window.location.pathname);}catch{}
-      setTimeout(()=>toast('Authenticated via bearer link'),400);
-    }
-  }
+  return Boolean(state.token);
 }
-checkPairing();
 
 if('serviceWorker' in navigator){
   navigator.serviceWorker.register('/sw.js').catch(err=>console.warn('[SW]',err));
@@ -169,11 +157,7 @@ function cleanAnsi(text=''){
 }
 
 function token(){
-  if(!state.token){
-    state.token=prompt('Agy Remote bearer token')||'';
-    if(state.token)localStorage.setItem('agyToken',state.token);
-  }
-  return state.token;
+  return state.token||'';
 }
 
 async function api(path,options={}){
@@ -188,28 +172,35 @@ async function api(path,options={}){
   return data;
 }
 
-function connectWs(){
+// Connect WebSocket with single-use WS Ticket (30s lifetime)
+async function connectWs(){
   if(state.ws&&state.ws.readyState<=1)return;
-  const scheme=location.protocol==='https:'?'wss':'ws';
-  state.ws=new WebSocket(`${scheme}://${location.host}/api/v1/events?token=${encodeURIComponent(token())}`);
-  state.ws.onopen=()=>{
-    state.ws.send(JSON.stringify({type:'resume',lastSeq:state.lastSeq}));
-    if(state.conversationId)subscribe('conversation',state.conversationId);
-    if(state.terminalId)subscribe('terminal',state.terminalId);
-  };
-  state.ws.onmessage=(e)=>{
-    const m=JSON.parse(e.data);
-    if(m.seq){
-      state.lastSeq=m.seq;
-      localStorage.setItem('agySeq',String(m.seq));
-      handleEvent(m);
-    }else if(m.type==='resync_required'&&state.conversationId){
-      openConversation(state.conversationId);
-    }
-  };
-  state.ws.onclose=()=>setTimeout(connectWs,1200);
-  state.ws.onerror=()=>{};
+  try{
+    const { ticket }=await api('/api/v1/auth/ws-ticket',{method:'POST'});
+    const scheme=location.protocol==='https:'?'wss':'ws';
+    state.ws=new WebSocket(`${scheme}://${location.host}/api/v1/events?ticket=${encodeURIComponent(ticket)}`);
+    state.ws.onopen=()=>{
+      state.ws.send(JSON.stringify({type:'resume',lastSeq:state.lastSeq}));
+      if(state.conversationId)subscribe('conversation',state.conversationId);
+      if(state.terminalId)subscribe('terminal',state.terminalId);
+    };
+    state.ws.onmessage=(e)=>{
+      const m=JSON.parse(e.data);
+      if(m.seq){
+        state.lastSeq=m.seq;
+        localStorage.setItem('agySeq',String(m.seq));
+        handleEvent(m);
+      }else if(m.type==='resync_required'&&state.conversationId){
+        openConversation(state.conversationId);
+      }
+    };
+    state.ws.onclose=()=>setTimeout(connectWs,2000);
+    state.ws.onerror=()=>{};
+  }catch(err){
+    setTimeout(connectWs,3000);
+  }
 }
+
 function subscribe(channel,resourceId){
   if(state.ws?.readyState===1)state.ws.send(JSON.stringify({type:'subscribe',channel,resourceId}));
 }
@@ -290,9 +281,9 @@ function renderEvent(e,index){
           ${inter.reason?`<div><small>Reason: ${escapeHtml(inter.reason)}</small></div>`:''}
           <div class="actions-wrap">
             <button class="primary-btn" data-act="file" data-idx="${index}" data-scope="PERMISSION_SCOPE_ONCE" data-allow="1">Allow Once</button>
-            <button data-act="file" data-idx="${index}" data-scope="PERMISSION_SCOPE_CONVERSATION" data-allow="1">Allow Session</button>
-            <button data-act="file" data-idx="${index}" data-scope="PERMISSION_SCOPE_WORKSPACE" data-allow="1">Allow Workspace</button>
-            <button class="danger" data-act="file" data-idx="${index}" data-allow="0">Reject</button>
+            <button class="ghost-btn" data-act="file" data-idx="${index}" data-scope="PERMISSION_SCOPE_CONVERSATION" data-allow="1">Allow Session</button>
+            <button class="ghost-btn" data-act="file" data-idx="${index}" data-scope="PERMISSION_SCOPE_WORKSPACE" data-allow="1">Allow Workspace</button>
+            <button class="danger-btn" data-act="file" data-idx="${index}" data-allow="0">Reject</button>
           </div>
         </div>
       </article>`;
@@ -307,7 +298,7 @@ function renderEvent(e,index){
           <div><label><small>Edit Command before running:</small></label><input id="cmd_input_${index}" value="${escapeHtml(cmd)}" /></div>
           <div class="actions-wrap">
             <button class="primary-btn" data-act="cmd" data-idx="${index}" data-allow="1">Run Command</button>
-            <button class="danger" data-act="cmd" data-idx="${index}" data-allow="0">Reject</button>
+            <button class="danger-btn" data-act="cmd" data-idx="${index}" data-allow="0">Reject</button>
           </div>
         </div>
       </article>`;
@@ -335,7 +326,7 @@ function renderEvent(e,index){
           `).join('')}
           <div class="actions-wrap">
             <button class="primary-btn" data-act="question" data-idx="${index}" data-allow="1">Submit Answer</button>
-            <button class="danger" data-act="question" data-idx="${index}" data-allow="0">Cancel</button>
+            <button class="ghost-btn" data-act="question" data-idx="${index}" data-allow="0">Cancel</button>
           </div>
         </div>
       </article>`;
@@ -350,7 +341,7 @@ function renderEvent(e,index){
         <div><label><small>Review Feedback (optional):</small></label><input id="artifact_comment_${index}" placeholder="Leave comment…" /></div>
         <div class="actions-wrap">
           <button class="primary-btn" data-act="artifact" data-idx="${index}" data-allow="1">Approve Artifact</button>
-          <button class="danger" data-act="artifact" data-idx="${index}" data-allow="0">Reject</button>
+          <button class="danger-btn" data-act="artifact" data-idx="${index}" data-allow="0">Reject</button>
         </div>
       </div>
     </article>`;
@@ -512,17 +503,15 @@ function findBase64(obj,depth=0){
 async function loadPages(){
   try{
     const d=await api('/api/v1/browser/pages');
-    $('#pageList').innerHTML=d.pages.map((p,i)=>{
+    $('#pageList').innerHTML=(d.pages||[]).map((p,i)=>{
       const id=p.pageId||p.id||String(i);
-      return `<div class="page ${id===state.selectedPageId?'active':''}" data-page="${escapeHtml(id)}"><strong>${escapeHtml(p.title||'Page')}</strong><small>${escapeHtml(p.url||id)}</small></div>`;
+      return `<button type="button" class="chip ${id===state.selectedPageId?'active':''}" data-page="${escapeHtml(id)}">${escapeHtml(p.title||'Page')}</button>`;
     }).join('');
     $$('[data-page]').forEach(el=>el.onclick=()=>{
       state.selectedPageId=el.dataset.page;
       capturePage(el.dataset.page);
     });
-  }catch(e){
-    toast(e.message);
-  }
+  }catch{}
 }
 
 async function capturePage(id){
@@ -539,21 +528,19 @@ async function capturePage(id){
 async function loadStatus(){
   try{
     const s=await api('/api/v1/status');
-    $('#statusText').textContent=`connected · ${s.instances.length} LS`;
-    if(!s.capabilities.integratedTerminal)$('#createTerminal').disabled=true;
+    const running=s.agentMonitor?.activeCount>0;
+    $('#statusText').textContent=running?'agent running':`connected · ${s.instances.length} LS`;
+    if(!s.capabilities?.integratedTerminal)$('#createTerminal').disabled=true;
   }catch(e){
     $('#statusText').textContent='not connected';
-    toast(e.message);
   }
 }
 
 async function loadWorkspaces(){
   try{
     const d=await api('/api/v1/workspaces');
-    $('#workspaceSelect').innerHTML='<option value="">Current workspace</option>'+d.workspaces.map(w=>`<option value="${escapeHtml(w)}">${escapeHtml(w.replace(/^file:\/\//,''))}</option>`).join('');
-  }catch(e){
-    toast(e.message);
-  }
+    $('#workspaceSelect').innerHTML='<option value="">Current workspace</option>'+(d.workspaces||[]).map(w=>`<option value="${escapeHtml(w)}">${escapeHtml(w.replace(/^file:\/\//,''))}</option>`).join('');
+  }catch{}
 }
 
 // Models vs Thinking Intensity Decoupling
@@ -606,14 +593,12 @@ $$('#thinkingSegmented .seg-btn').forEach(btn=>{
 async function loadConversations(){
   try{
     const d=await api('/api/v1/conversations');
-    $('#conversationList').innerHTML=d.conversations.map(c=>`<div class="conversation ${c.id===state.conversationId?'active':''}" data-id="${escapeHtml(c.id)}"><strong>${escapeHtml(c.title)}</strong><small><span><i class="status-dot ${c.status}"></i>${escapeHtml(c.status)}</span><span>${c.stepCount} steps</span></small></div>`).join('');
+    $('#conversationList').innerHTML=(d.conversations||[]).map(c=>`<div class="conversation ${c.id===state.conversationId?'active':''}" data-id="${escapeHtml(c.id)}"><strong>${escapeHtml(c.title)}</strong><small><span><i class="status-dot ${c.status}"></i>${escapeHtml(c.status)}</span><span>${c.stepCount} steps</span></small></div>`).join('');
     $$('.conversation').forEach(el=>el.onclick=()=>{
       openConversation(el.dataset.id);
       toggleDrawer(false);
     });
-  }catch(e){
-    toast(e.message);
-  }
+  }catch{}
 }
 
 async function openConversation(id){
@@ -638,14 +623,12 @@ async function openConversation(id){
 async function loadTerminals(){
   try{
     const d=await api('/api/v1/terminals');
-    $('#terminalList').innerHTML=d.terminals.map(t=>{
+    $('#terminalList').innerHTML=(d.terminals||[]).map(t=>{
       const tid=t.terminalId||t.id;
       return `<button type="button" class="chip ${tid===state.terminalId?'active':''}" data-tid="${escapeHtml(tid)}">${escapeHtml(t.title||tid)}</button>`;
     }).join('');
     $$('[data-tid]').forEach(el=>el.onclick=()=>selectTerminal(el.dataset.tid));
-  }catch(e){
-    toast(e.message);
-  }
+  }catch{}
 }
 
 function selectTerminal(tid){
@@ -693,7 +676,6 @@ $('#notifyBtn').onclick=async()=>{
     return;
   }
 
-  // Complete Web Push Subscription pipeline
   if('serviceWorker' in navigator && 'PushManager' in window){
     try{
       const reg=await navigator.serviceWorker.ready;
@@ -704,7 +686,7 @@ $('#notifyBtn').onclick=async()=>{
           applicationServerKey:urlBase64ToUint8Array(publicKey)
         });
         await api('/api/v1/push/subscribe',{method:'POST',body:sub});
-        toast('Web Push Subscribed! Testing background push...');
+        toast('Web Push Active!');
         await api('/api/v1/push/test',{
           method:'POST',
           body:{title:'Agy Remote Push Active',body:'Web Push is working even when app is closed!'}
@@ -721,13 +703,12 @@ $('#notifyBtn').onclick=async()=>{
 };
 
 $('#tokenBtn').onclick=()=>{
-  const next=prompt('Agy Remote bearer token',state.token)||'';
+  const next=prompt('Enter Agy Remote Device Token',state.token)||'';
   if(next){
     state.token=next;
     localStorage.setItem('agyToken',next);
     state.ws?.close();
-    connectWs();
-    loadStatus();
+    boot();
   }
 };
 
@@ -743,7 +724,7 @@ $('#newConversation').onclick=async()=>{
     });
     await loadConversations();
     await openConversation(d.cascadeId);
-    $('#agentSidebar').classList.remove('drawer-open');
+    toggleDrawer(false);
   }catch(e){
     toast(e.message);
   }
@@ -838,11 +819,25 @@ $('#openUrlForm').onsubmit=async(e)=>{
   }
 };
 
-// Initial boot
-connectWs();
-loadStatus();
-loadWorkspaces();
-loadModels();
-loadConversations();
-loadTerminals();
-loadPages();
+// Deterministic Boot Pipeline
+async function boot(){
+  const paired=await checkPairing();
+  if(!state.token){
+    $('#convTitle').textContent='Pairing required';
+    $('#convSub').textContent='Scan the pairing QR code on your computer to connect.';
+    toast('Please scan QR code to pair this device.');
+    return;
+  }
+
+  await connectWs();
+  await Promise.allSettled([
+    loadStatus(),
+    loadWorkspaces(),
+    loadModels(),
+    loadConversations(),
+    loadTerminals(),
+    loadPages(),
+  ]);
+}
+
+boot();

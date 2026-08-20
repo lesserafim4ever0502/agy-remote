@@ -1,341 +1,390 @@
-import http from 'node:http';
-import { createAgyClient } from '../../../packages/agy-ls/src/index.js';
-import { redactInstance } from '../../../packages/agy-ls/src/utils.js';
-import { DEFAULT_REMOTE_PORT } from '../../../packages/agy-ls/src/constants.js';
-import { loadOrCreateToken, isAuthorized, assertSafeBind } from './auth.js';
-import { EventHub } from './event-hub.js';
-import { acceptWebSocket } from './websocket.js';
-import { readJson, sendJson, sendError } from './http-utils.js';
-import { serveStatic } from './static.js';
-
-const host = process.env.AGY_REMOTE_HOST || '0.0.0.0';
-const port = Number(process.env.AGY_REMOTE_PORT || DEFAULT_REMOTE_PORT);
-assertSafeBind(host);
-
-const auth = loadOrCreateToken();
-const agy = createAgyClient({ logger: console });
-const hub = new EventHub({ maxEvents: 2000 });
-const watchers = new Map();
-const clientResources = new WeakMap();
-
+import http from "node:http";
+import { createAgyClient } from "../../../packages/agy-ls/src/index.js";
+import { redactInstance } from "../../../packages/agy-ls/src/utils.js";
+import { DEFAULT_REMOTE_PORT } from "../../../packages/agy-ls/src/constants.js";
+import {
+  loadOrCreateToken,
+  isAuthorized,
+  assertSafeBind,
+  createPairingSecret,
+  exchangePairingSecret,
+  listSessions,
+  revokeSession,
+  revokeAllSessions,
+  createWsTicket,
+  consumeWsTicket,
+} from "./auth.js";
+import { EventHub } from "./event-hub.js";
+import { acceptWebSocket } from "./websocket.js";
+import { readJson, sendJson, sendError } from "./http-utils.js";
+import { serveStatic } from "./static.js";
 import {
   initWebPush,
   getVapidPublicKey,
   saveSubscription,
   removeSubscription,
   sendPushNotification,
-} from './push.js';
+} from "./push.js";
+import { AgentMonitor } from "./agent-monitor.js";
+import { TailscaleManager } from "./tailscale.js";
+import { formatPairingTerminal } from "./qr.js";
+
+const host = process.env.AGY_REMOTE_HOST || "127.0.0.1";
+const port = Number(process.env.AGY_REMOTE_PORT || DEFAULT_REMOTE_PORT);
+assertSafeBind(host);
+
+const auth = loadOrCreateToken();
+const agy = createAgyClient({ logger: console });
+const hub = new EventHub({ maxEvents: 2000 });
+const ts = new TailscaleManager();
+const terminalWatchers = new Map();
+const clientResources = new WeakMap();
 
 initWebPush();
 
-function watcherKey(channel, resourceId) { return `${channel}:${resourceId}`; }
+// Persistent Agent Monitor: Sole Owner of Conversation Streams
+const monitor = new AgentMonitor({ agy, hub, logger: console });
+monitor.start().catch((err) => console.warn("[Bridge] AgentMonitor initial error:", err.message));
 
-async function acquireWatcher(channel, resourceId) {
-  const key = watcherKey(channel, resourceId);
-  let watcher = watchers.get(key);
+async function acquireTerminalWatcher(terminalId) {
+  let watcher = terminalWatchers.get(terminalId);
   if (watcher) { watcher.refs += 1; return watcher; }
-  watcher = { channel, resourceId, refs: 1, stop: null, pending: true };
-  watchers.set(key, watcher);
+  watcher = { terminalId, refs: 1, stop: null, pending: true };
+  terminalWatchers.set(terminalId, watcher);
 
   try {
-    if (channel === 'conversation') {
-      watcher.stop = agy.streams.subscribe(resourceId, (event) => {
-        hub.publish('conversation', resourceId, event);
-        if (event.type === 'approval.required' || event.type === 'agent.question') {
-          sendPushNotification({
-            title: event.type === 'approval.required' ? 'Antigravity Approval Required' : 'Question from Agent',
-            body: event.interaction?.kind ? `Action needed: ${event.interaction.kind}` : 'Agent is waiting for your response.',
-            data: { conversationId: resourceId, url: `/#conv=${resourceId}` },
-          }).catch((err) => console.warn('[Push]', err.message));
-        }
-      });
-    } else if (channel === 'terminal') {
-      const controller = await agy.terminals.stream(resourceId, {
-        onMessage: (event) => hub.publish('terminal', resourceId, { type: 'terminal.output', ...event }),
-        onError: (error) => hub.publish('terminal', resourceId, { type: 'error', message: error.message }),
-        onEnd: () => hub.publish('terminal', resourceId, { type: 'terminal.end' }),
-      });
-      watcher.stop = () => controller?.abort?.();
-    }
+    const controller = await agy.terminals.stream(terminalId, {
+      onMessage: (event) => hub.publish("terminal", terminalId, { type: "terminal.output", ...event }),
+      onError: (error) => hub.publish("terminal", terminalId, { type: "error", message: error.message }),
+      onEnd: () => hub.publish("terminal", terminalId, { type: "terminal.end" }),
+    });
+    watcher.stop = () => controller?.abort?.();
   } catch (error) {
-    hub.publish(channel, resourceId, { type: 'error', message: error.message });
+    hub.publish("terminal", terminalId, { type: "error", message: error.message });
   } finally {
     watcher.pending = false;
   }
   return watcher;
 }
 
-function releaseWatcher(channel, resourceId) {
-  const key = watcherKey(channel, resourceId);
-  const watcher = watchers.get(key);
+function releaseTerminalWatcher(terminalId) {
+  const watcher = terminalWatchers.get(terminalId);
   if (!watcher) return;
   watcher.refs -= 1;
   if (watcher.refs <= 0) {
+    terminalWatchers.delete(terminalId);
     try { watcher.stop?.(); } catch {}
-    watchers.delete(key);
   }
-}
-
-async function handleWsMessage(message, client) {
-  if (!message || typeof message !== 'object') return;
-  if (message.type === 'resume') {
-    hub.resume(client, message.lastSeq);
-    return;
-  }
-  if (message.type === 'subscribe') {
-    const channel = String(message.channel || '');
-    const resourceId = String(message.resourceId || '');
-    if (!['conversation', 'terminal'].includes(channel) || !resourceId) throw new Error('Invalid subscription');
-    const resourceKey = watcherKey(channel, resourceId);
-    const resources = clientResources.get(client) || new Set();
-    if (!resources.has(resourceKey)) {
-      resources.add(resourceKey);
-      clientResources.set(client, resources);
-      hub.subscribe(client, channel, resourceId);
-      await acquireWatcher(channel, resourceId);
-    }
-    client.sendJson({ type: 'subscribed', channel, resourceId, currentSeq: hub.seq });
-    return;
-  }
-  if (message.type === 'unsubscribe') {
-    const channel = String(message.channel || '');
-    const resourceId = String(message.resourceId || '');
-    const resourceKey = watcherKey(channel, resourceId);
-    const resources = clientResources.get(client);
-    if (resources?.delete(resourceKey)) releaseWatcher(channel, resourceId);
-    hub.unsubscribe(client, channel, resourceId);
-    return;
-  }
-  if (message.type === 'ping') client.sendJson({ type: 'pong', currentSeq: hub.seq });
 }
 
 function cleanupClient(client) {
   hub.removeClient(client);
-  const resources = clientResources.get(client) || new Set();
-  for (const key of resources) {
-    const split = key.indexOf(':');
-    releaseWatcher(key.slice(0, split), key.slice(split + 1));
+  const resources = clientResources.get(client);
+  if (!resources) return;
+  for (const item of resources) {
+    if (item.channel === "terminal") {
+      releaseTerminalWatcher(item.resourceId);
+    }
   }
   clientResources.delete(client);
 }
 
+async function handleWsMessage(message, client) {
+  if (!message || typeof message !== "object") return;
+  if (message.type === "subscribe") {
+    const { channel, resourceId } = message;
+    if (!channel || !resourceId) return;
+
+    hub.subscribe(client, channel, resourceId);
+    const set = clientResources.get(client);
+    set?.add({ channel, resourceId });
+
+    if (channel === "terminal") {
+      await acquireTerminalWatcher(resourceId);
+    } else if (channel === "conversation") {
+      monitor.ensureMonitored(resourceId);
+    }
+  } else if (message.type === "unsubscribe") {
+    const { channel, resourceId } = message;
+    hub.unsubscribe(client, channel, resourceId);
+    const set = clientResources.get(client);
+    if (set) {
+      for (const item of set) {
+        if (item.channel === channel && item.resourceId === resourceId) {
+          set.delete(item);
+          if (channel === "terminal") releaseTerminalWatcher(resourceId);
+        }
+      }
+    }
+  } else if (message.type === "resume") {
+    hub.resume(client, message.lastSeq);
+  }
+}
+
 async function api(req, res, url) {
   const pathname = url.pathname;
-  const method = req.method || 'GET';
+  const method = req.method || "GET";
 
-  if (pathname === '/api/v1/ping') return sendJson(res, 200, { name: 'agy-remote', version: '0.1.0-dev' });
-  if (pathname === '/api/v1/health') return sendJson(res, 200, { ok: true, now: new Date().toISOString() });
-  
-  if (method === 'POST' && pathname === '/api/v1/auth/pair') {
+  if (pathname === "/api/v1/ping") return sendJson(res, 200, { name: "agy-remote", version: "0.1.0-dev" });
+  if (pathname === "/api/v1/health") return sendJson(res, 200, { ok: true, now: new Date().toISOString() });
+
+  // Public Pairing Exchange Endpoint (Single-use secret -> Hashed Device Session)
+  if (method === "POST" && pathname === "/api/v1/auth/pair") {
     const body = await readJson(req);
-    const session = exchangePairingSecret(body.pairSecret, body.deviceLabel || req.headers['user-agent']);
+    const session = exchangePairingSecret(body.pairSecret, body.deviceLabel || req.headers["user-agent"]);
     return sendJson(res, 200, session);
   }
 
+  // All endpoints below require Bearer Authorization (Master Token or Hashed Device Session)
   if (!isAuthorized(req, url, auth.token)) {
-    return sendJson(res, 401, { error: 'unauthorized', message: 'Invalid or missing bearer token' });
+    return sendJson(res, 401, { error: "unauthorized", message: "Invalid or missing bearer token" });
   }
 
-  if (method === 'GET' && pathname === '/api/v1/push/vapid-public-key') {
+  // Auth & Session Management API
+  if (method === "POST" && pathname === "/api/v1/auth/pair-secret") {
+    return sendJson(res, 200, createPairingSecret());
+  }
+  if (method === "POST" && pathname === "/api/v1/auth/ws-ticket") {
+    return sendJson(res, 200, createWsTicket());
+  }
+  if (method === "GET" && pathname === "/api/v1/auth/devices") {
+    return sendJson(res, 200, { devices: listSessions() });
+  }
+  if (method === "POST" && pathname === "/api/v1/auth/devices/revoke") {
+    const body = await readJson(req);
+    return sendJson(res, 200, { ok: revokeSession(body.id) });
+  }
+  if (method === "POST" && pathname === "/api/v1/auth/devices/revoke-all") {
+    return sendJson(res, 200, revokeAllSessions());
+  }
+
+  // Web Push Endpoints
+  if (method === "GET" && pathname === "/api/v1/push/vapid-public-key") {
     return sendJson(res, 200, { publicKey: getVapidPublicKey() });
   }
-  if (method === 'POST' && pathname === '/api/v1/push/subscribe') {
+  if (method === "POST" && pathname === "/api/v1/push/subscribe") {
     const body = await readJson(req);
     return sendJson(res, 200, saveSubscription(body));
   }
-  if (method === 'POST' && pathname === '/api/v1/push/unsubscribe') {
+  if (method === "POST" && pathname === "/api/v1/push/unsubscribe") {
     const body = await readJson(req);
     return sendJson(res, 200, removeSubscription(body.endpoint));
   }
-  if (method === 'POST' && pathname === '/api/v1/push/test') {
+  if (method === "POST" && pathname === "/api/v1/push/test") {
     const body = await readJson(req);
     return sendJson(res, 200, await sendPushNotification(body));
   }
 
-  if (method === 'POST' && pathname === '/api/v1/auth/pair-secret') {
-    return sendJson(res, 200, createPairingSecret());
-  }
-  if (method === 'GET' && pathname === '/api/v1/status') {
+  // Status & Health
+  if (method === "GET" && pathname === "/api/v1/status") {
     const instances = await agy.router.refresh();
     const capabilities = await agy.capabilities.probe();
+    const tsHealth = await ts.health();
     return sendJson(res, 200, {
       ok: true,
       instances: instances.map(redactInstance),
       capabilities,
       eventSeq: hub.seq,
+      agentMonitor: monitor.status(),
+      tailscale: tsHealth,
     });
   }
 
-  if (method === 'GET' && pathname === '/api/v1/workspaces') {
-    await agy.router.ensure();
-    const values = [...new Set(agy.router.instances.flatMap((instance) => instance.workspaceUris || []))];
-    return sendJson(res, 200, { workspaces: values });
+  if (method === "GET" && pathname === "/api/v1/workspaces") {
+    return sendJson(res, 200, { workspaces: await agy.router.listWorkspaces() });
+  }
+  if (method === "GET" && pathname === "/api/v1/models") {
+    return sendJson(res, 200, { models: await agy.models.list() });
   }
 
-  if (method === 'GET' && pathname === '/api/v1/conversations') return sendJson(res, 200, { conversations: await agy.conversations.list() });
-  if (method === 'POST' && pathname === '/api/v1/conversations') return sendJson(res, 201, await agy.conversations.create(await readJson(req)));
-  if (method === 'GET' && pathname === '/api/v1/models') return sendJson(res, 200, { models: await agy.models.list() });
-  if (method === 'GET' && pathname === '/api/v1/quota') return sendJson(res, 200, { quota: await agy.models.quota() });
-
-  let match = pathname.match(/^\/api\/v1\/conversations\/([^/]+)$/);
-  if (match && method === 'GET') return sendJson(res, 200, await agy.conversations.snapshot(decodeURIComponent(match[1])));
-  if (match && method === 'DELETE') return sendJson(res, 200, await agy.conversations.delete(decodeURIComponent(match[1])));
-
-  match = pathname.match(/^\/api\/v1\/conversations\/([^/]+)\/messages$/);
-  if (match && method === 'POST') return sendJson(res, 200, await agy.conversations.send(decodeURIComponent(match[1]), await readJson(req)));
-
-  match = pathname.match(/^\/api\/v1\/conversations\/([^/]+)\/stop$/);
-  if (match && method === 'POST') return sendJson(res, 200, await agy.conversations.stop(decodeURIComponent(match[1])));
-
-  match = pathname.match(/^\/api\/v1\/conversations\/([^/]+)\/revert$/);
-  if (match && method === 'POST') {
+  // Conversations
+  if (method === "GET" && pathname === "/api/v1/conversations") {
+    return sendJson(res, 200, { conversations: await agy.conversations.list() });
+  }
+  if (method === "POST" && pathname === "/api/v1/conversations") {
     const body = await readJson(req);
-    return sendJson(res, 200, await agy.conversations.revert(decodeURIComponent(match[1]), body.stepIndex, body));
+    const created = await agy.conversations.create(body);
+    monitor.ensureMonitored(created.cascadeId);
+    return sendJson(res, 200, created);
   }
 
-  match = pathname.match(/^\/api\/v1\/conversations\/([^/]+)\/artifacts\/approve$/);
-  if (match && method === 'POST') return sendJson(res, 200, await agy.conversations.approveArtifact(decodeURIComponent(match[1]), await readJson(req)));
+  const convMatch = pathname.match(/^\/api\/v1\/conversations\/([^/]+)$/);
+  if (convMatch && method === "GET") {
+    const cascadeId = decodeURIComponent(convMatch[1]);
+    monitor.ensureMonitored(cascadeId);
+    return sendJson(res, 200, await agy.conversations.snapshot(cascadeId));
+  }
+  if (convMatch && method === "DELETE") {
+    const cascadeId = decodeURIComponent(convMatch[1]);
+    return sendJson(res, 200, await agy.conversations.delete(cascadeId));
+  }
 
-  match = pathname.match(/^\/api\/v1\/conversations\/([^/]+)\/artifacts\/reject$/);
-  if (match && method === 'POST') {
+  const msgMatch = pathname.match(/^\/api\/v1\/conversations\/([^/]+)\/messages$/);
+  if (msgMatch && method === "POST") {
+    const cascadeId = decodeURIComponent(msgMatch[1]);
     const body = await readJson(req);
-    return sendJson(res, 200, await agy.conversations.approveArtifact(decodeURIComponent(match[1]), { ...body, approved: false }));
+    monitor.ensureMonitored(cascadeId);
+    return sendJson(res, 200, await agy.conversations.send(cascadeId, body));
   }
 
-  match = pathname.match(/^\/api\/v1\/conversations\/([^/]+)\/interactions\/respond$/);
-  if (match && method === 'POST') return sendJson(res, 200, await agy.interactions.respond(decodeURIComponent(match[1]), await readJson(req)));
-
-  if (method === 'GET' && pathname === '/api/v1/terminals') {
-    return sendJson(res, 200, { terminals: await agy.terminals.list(url.searchParams.get('conversationId') || '') });
+  const stopMatch = pathname.match(/^\/api\/v1\/conversations\/([^/]+)\/stop$/);
+  if (stopMatch && method === "POST") {
+    const cascadeId = decodeURIComponent(stopMatch[1]);
+    return sendJson(res, 200, await agy.conversations.stop(cascadeId));
   }
-  if (method === 'POST' && pathname === '/api/v1/terminals') return sendJson(res, 201, await agy.terminals.create(await readJson(req)));
-  match = pathname.match(/^\/api\/v1\/terminals\/([^/]+)\/input$/);
-  if (match && method === 'POST') {
+
+  const interactMatch = pathname.match(/^\/api\/v1\/conversations\/([^/]+)\/interactions\/respond$/);
+  if (interactMatch && method === "POST") {
+    const cascadeId = decodeURIComponent(interactMatch[1]);
     const body = await readJson(req);
-    return sendJson(res, 200, await agy.terminals.input(decodeURIComponent(match[1]), body.input || ''));
+    return sendJson(res, 200, await agy.interactions.respond(cascadeId, body));
   }
-  match = pathname.match(/^\/api\/v1\/terminals\/([^/]+)\/resize$/);
-  if (match && method === 'POST') {
-    const body = await readJson(req);
-    return sendJson(res, 200, await agy.terminals.resize(decodeURIComponent(match[1]), body.cols, body.rows));
-  }
-  match = pathname.match(/^\/api\/v1\/terminals\/([^/]+)$/);
-  if (match && method === 'DELETE') return sendJson(res, 200, await agy.terminals.close(decodeURIComponent(match[1]), url.searchParams.get('force') === '1'));
 
-  if (method === 'GET' && pathname === '/api/v1/browser/pages') return sendJson(res, 200, { pages: await agy.browser.listPages() });
-  if (method === 'POST' && pathname === '/api/v1/browser/open') {
+  const artApproveMatch = pathname.match(/^\/api\/v1\/conversations\/([^/]+)\/artifacts\/approve$/);
+  if (artApproveMatch && method === "POST") {
+    const cascadeId = decodeURIComponent(artApproveMatch[1]);
     const body = await readJson(req);
-    return sendJson(res, 200, await agy.browser.open(body.url, body.isOnboarded ?? true));
+    return sendJson(res, 200, await agy.interactions.respond(cascadeId, { kind: "artifactReview", approved: true, ...body }));
   }
-  match = pathname.match(/^\/api\/v1\/browser\/pages\/([^/]+)\/focus$/);
-  if (match && method === 'POST') return sendJson(res, 200, await agy.browser.focus(decodeURIComponent(match[1])));
-  match = pathname.match(/^\/api\/v1\/browser\/pages\/([^/]+)\/screenshot$/);
-  if (match && method === 'GET') return sendJson(res, 200, await agy.browser.screenshot(decodeURIComponent(match[1])));
-  match = pathname.match(/^\/api\/v1\/browser\/pages\/([^/]+)\/console$/);
-  if (match && method === 'GET') return sendJson(res, 200, await agy.browser.consoleLogs(decodeURIComponent(match[1])));
 
-  sendJson(res, 404, { error: 'not_found', message: `${method} ${pathname}` });
+  const artRejectMatch = pathname.match(/^\/api\/v1\/conversations\/([^/]+)\/artifacts\/reject$/);
+  if (artRejectMatch && method === "POST") {
+    const cascadeId = decodeURIComponent(artRejectMatch[1]);
+    const body = await readJson(req);
+    return sendJson(res, 200, await agy.interactions.respond(cascadeId, { kind: "artifactReview", approved: false, ...body }));
+  }
+
+  // Terminals
+  if (method === "GET" && pathname === "/api/v1/terminals") {
+    return sendJson(res, 200, { terminals: await agy.terminals.list() });
+  }
+  if (method === "POST" && pathname === "/api/v1/terminals") {
+    const body = await readJson(req);
+    return sendJson(res, 200, await agy.terminals.create(body));
+  }
+
+  const termInput = pathname.match(/^\/api\/v1\/terminals\/([^/]+)\/input$/);
+  if (termInput && method === "POST") {
+    const terminalId = decodeURIComponent(termInput[1]);
+    const body = await readJson(req);
+    return sendJson(res, 200, await agy.terminals.input(terminalId, body.input));
+  }
+
+  const termResize = pathname.match(/^\/api\/v1\/terminals\/([^/]+)\/resize$/);
+  if (termResize && method === "POST") {
+    const terminalId = decodeURIComponent(termResize[1]);
+    const body = await readJson(req);
+    return sendJson(res, 200, await agy.terminals.resize(terminalId, body.cols, body.rows));
+  }
+
+  // Browser
+  if (method === "GET" && pathname === "/api/v1/browser/pages") {
+    return sendJson(res, 200, { pages: await agy.browser.listPages() });
+  }
+  if (method === "POST" && pathname === "/api/v1/browser/open") {
+    const body = await readJson(req);
+    return sendJson(res, 200, await agy.browser.open(body.url));
+  }
+
+  const pageShot = pathname.match(/^\/api\/v1\/browser\/pages\/([^/]+)\/screenshot$/);
+  if (pageShot && method === "GET") {
+    const pageId = decodeURIComponent(pageShot[1]);
+    return sendJson(res, 200, await agy.browser.screenshot(pageId));
+  }
+
+  const pageConsole = pathname.match(/^\/api\/v1\/browser\/pages\/([^/]+)\/console$/);
+  if (pageConsole && method === "GET") {
+    const pageId = decodeURIComponent(pageConsole[1]);
+    return sendJson(res, 200, { logs: await agy.browser.consoleLogs(pageId) });
+  }
+
+  return sendError(res, 404, "Not Found");
 }
 
-const server = http.createServer(async (req, res) => {
+export const server = http.createServer(async (req, res) => {
   try {
-    const url = new URL(req.url || '/', `http://${req.headers.host || `${host}:${port}`}`);
-    if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
-    if (url.pathname.startsWith('/api/')) return await api(req, res, url);
-    if (serveStatic(url.pathname, res)) return;
-    sendJson(res, 404, { error: 'not_found' });
+    const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+    if (url.pathname.startsWith("/api/")) {
+      return await api(req, res, url);
+    }
+    return serveStatic(req, res, url);
   } catch (error) {
-    console.error(error);
-    if (!res.headersSent) sendError(res, error);
-    else res.end();
+    sendError(res, 500, error.message);
   }
 });
 
-server.on('upgrade', (req, socket, head) => {
+// WebSocket Server (Validates One-Time WS Ticket or Bearer before 101 switch)
+server.on("upgrade", (req, socket, head) => {
   try {
-    const url = new URL(req.url || '/', `http://${req.headers.host || `${host}:${port}`}`);
-    if (url.pathname !== '/api/v1/events' || !isAuthorized(req, url, auth.token)) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+    const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+    if (url.pathname !== "/api/v1/events") {
+      socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
       socket.destroy();
       return;
     }
+
+    // 1. Check one-time WS Ticket first
+    const ticket = url.searchParams.get("ticket");
+    const ticketValid = ticket ? consumeWsTicket(ticket) : false;
+
+    // 2. Fallback to direct Bearer authorization
+    const authValid = isAuthorized(req, url, auth.token);
+
+    if (!ticketValid && !authValid) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
     acceptWebSocket(req, socket, head, {
       onOpen(client) {
         hub.addClient(client);
         clientResources.set(client, new Set());
-        client.sendJson({ type: 'ready', currentSeq: hub.seq });
+        client.sendJson({ type: "ready", currentSeq: hub.seq });
       },
-      onMessage(message, client) { handleWsMessage(message, client).catch((error) => client.sendJson({ type: 'error', message: error.message })); },
+      onMessage(message, client) {
+        handleWsMessage(message, client).catch((error) =>
+          client.sendJson({ type: "error", message: error.message })
+        );
+      },
       onClose: cleanupClient,
-      onError(error) { console.warn('[ws]', error.message); },
+      onError(error) {
+        console.warn("[ws error]", error.message);
+      },
     });
   } catch (error) {
-    console.warn('[ws upgrade]', error.message);
+    console.warn("[ws upgrade error]", error.message);
     socket.destroy();
   }
 });
 
-import os from 'node:os';
-import { formatPairingTerminal } from './qr.js';
-import { createPairingSecret, exchangePairingSecret } from './auth.js';
-
-function getNetworkAddresses(port) {
-  const nets = os.networkInterfaces();
-  const addresses = [];
-  let tailscaleIp = null;
-  let lanIp = null;
-
-  for (const name of Object.keys(nets)) {
-    for (const net of nets[name] || []) {
-      if (net.family === 'IPv4' && !net.internal) {
-        const isTailscale = name.toLowerCase().includes('tailscale') || net.address.startsWith('100.');
-        if (isTailscale && !tailscaleIp) tailscaleIp = net.address;
-        else if (!lanIp) lanIp = net.address;
-        addresses.push({ name, address: net.address, isTailscale });
-      }
+if (process.argv[1] && process.argv[1].endsWith("server.js")) {
+  server.listen(port, host, async () => {
+    const isBg = process.env.AGY_BACKGROUND === "1";
+    if (isBg) {
+      console.log(`[Bridge] Background daemon active on http://${host}:${port}`);
+      console.log(`[Bridge] Pairing secrets and QR code suppressed in daemon log mode.`);
+      return;
     }
-  }
-  const preferredIp = tailscaleIp || lanIp || host;
-  return { addresses, preferredIp, tailscaleIp, lanIp };
-}
 
-server.listen(port, host, async () => {
-  const isBackground = process.env.AGY_BACKGROUND === '1' || process.env.NODE_ENV === 'production';
-  const { preferredIp, tailscaleIp, lanIp } = getNetworkAddresses(port);
-  const localUrl = `http://127.0.0.1:${port}`;
+    const { secret } = createPairingSecret();
+    const tsHealth = await ts.health();
+    const remoteUrl = tsHealth.httpsUrl
+      ? `${tsHealth.httpsUrl}/#pair=${secret}`
+      : `http://127.0.0.1:${port}/#pair=${secret}`;
 
-  if (isBackground) {
-    console.log(`[Bridge] Background daemon active on http://${preferredIp}:${port}`);
-    console.log(`[Bridge] Local loopback: ${localUrl}`);
-    if (tailscaleIp) console.log(`[Bridge] Tailscale: http://${tailscaleIp}:${port}`);
-    console.log('[Bridge] Pairing secrets and QR code suppressed in daemon log mode.');
-  } else {
-    const pairing = createPairingSecret();
-    const pairingUrl = `http://${preferredIp}:${port}/#pair=${pairing.secret}`;
-
-    console.log('\n==================================================');
-    console.log('   AGY REMOTE - MOBILE BRIDGE READY');
-    console.log('==================================================');
-    console.log(`Local Access:     ${localUrl}`);
-    if (tailscaleIp) console.log(`Tailscale Access: http://${tailscaleIp}:${port}`);
-    if (lanIp)       console.log(`LAN Access:       http://${lanIp}:${port}`);
-    console.log(`One-Time Pairing: ${pairingUrl}\n`);
-
+    console.log(`\n==================================================`);
+    console.log(`   AGY REMOTE - LOCALHOST BRIDGE READY`);
+    console.log(`==================================================`);
+    console.log(`Local Access:     http://127.0.0.1:${port}`);
+    if (tsHealth.httpsUrl) {
+      console.log(`Tailscale HTTPS:  ${tsHealth.httpsUrl}`);
+    }
+    console.log(`Pairing URL:      ${remoteUrl}`);
+    console.log(`\nScan with your phone to pair (One-time secret):`);
     try {
-      const qr = await formatPairingTerminal(pairingUrl);
-      if (qr) {
-        console.log('Scan with your phone to pair (One-time secret):');
-        console.log(qr);
-        console.log('');
-      }
+      console.log(await formatPairingTerminal(remoteUrl));
     } catch {}
-    console.log('==================================================\n');
-  }
-
-  try {
-    const instances = await agy.router.refresh();
-    console.log(`[Status] Connected to ${instances.length} Antigravity Language Server instance(s).`);
-  } catch (error) {
-    console.warn(`[Status] Antigravity discovery not ready: ${error.message}`);
-  }
-});
+    console.log(`\n==================================================\n`);
+  });
+}

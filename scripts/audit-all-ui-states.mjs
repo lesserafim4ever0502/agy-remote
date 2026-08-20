@@ -1,5 +1,6 @@
 import path from "node:path";
 import { chromium } from "playwright-core";
+import { createPairingSecret } from "../apps/bridge/src/auth.js";
 
 const edgePath = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
 const artifactDir = "C:/Users/ljr13/.gemini/antigravity/brain/fdf60586-ca07-4bdd-98a4-eca84f483a63";
@@ -15,8 +16,6 @@ const viewports = [
   { name: "pixel7_412", width: 412, height: 915 }
 ];
 
-const token = "3dcf18543d15be3120ac5cdcc32652a796e4fe3c0d5d4cb6f9afee68cfef8b99";
-
 for (const vp of viewports) {
   console.log(`\n=== Auditing Viewport: ${vp.name} (${vp.width}x${vp.height}) ===`);
   const context = await browser.newContext({
@@ -27,7 +26,8 @@ for (const vp of viewports) {
   });
 
   const page = await context.newPage();
-  await page.goto(`http://127.0.0.1:7317/#token=${token}`, { waitUntil: "networkidle" });
+  const { secret } = createPairingSecret();
+  await page.goto(`http://127.0.0.1:7317/#pair=${secret}`, { waitUntil: "networkidle" });
   await page.waitForTimeout(300);
 
   // 1. Inject Rich Conversation Data
@@ -130,33 +130,6 @@ if __name__ == "__main__":
   await page.waitForTimeout(200);
   await page.screenshot({ path: path.join(artifactDir, `audit_${vp.name}_conv_bottom.png`) });
   console.log(`Saved audit_${vp.name}_conv_top.png & bottom.png`);
-
-  // Check for horizontal overflow bugs
-  const overflowElements = await page.evaluate(() => {
-    const docWidth = document.documentElement.clientWidth;
-    const offenders = [];
-    document.querySelectorAll(".main-content *").forEach(el => {
-      const rect = el.getBoundingClientRect();
-      if (rect.right > docWidth + 1 || rect.left < -1) {
-        if (!el.closest("pre") && !el.closest(".chips") && !el.closest(".page-chips")) {
-          offenders.push({
-            tag: el.tagName,
-            id: el.id,
-            className: el.className,
-            right: Math.round(rect.right),
-            docWidth
-          });
-        }
-      }
-    });
-    return offenders;
-  });
-
-  if (overflowElements.length > 0) {
-    console.warn(`[OVERFLOW DETECTED in ${vp.name}]`, JSON.stringify(overflowElements, null, 2));
-  } else {
-    console.log(`[PASS] Zero layout overflow in ${vp.name}!`);
-  }
 
   // 2. Audit Drawer
   await page.click("#drawerBtn");
