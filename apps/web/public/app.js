@@ -216,9 +216,14 @@ function handleEvent(message){
   if(message.channel==='conversation'&&message.resourceId===state.conversationId){
     const e=message.event;
     if(e.type==='conversation.state'){
-      const running=e.state?.status==='running';
+      const st=String(e.state?.status||e.status||'').toLowerCase();
+      const running=st==='running'||st.includes('waiting');
       $('#stopBtn').disabled=!running;
       $('#statusText').textContent=running?'agent running':'connected';
+      try{
+        const dot=document.querySelector(`.conversation[data-id="${CSS.escape(state.conversationId)}"] .status-dot`);
+        if(dot)dot.className=`status-dot ${running?'running':'idle'}`;
+      }catch{}
       return;
     }
     state.events.set(eventKey(e),e);
@@ -978,6 +983,15 @@ async function boot(){
   ]);
 
   await checkDirectConversation();
+
+  // Gentle low-frequency background refresh to keep state fresh
+  if(!window._stateRefresher){
+    window._stateRefresher=setInterval(()=>{
+      if(state.token){
+        loadStatus();
+      }
+    },3000);
+  }
 }
 
 boot();

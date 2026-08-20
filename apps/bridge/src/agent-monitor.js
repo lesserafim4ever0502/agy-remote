@@ -1,7 +1,7 @@
 import { sendPushNotification } from "./push.js";
 
-const ACTIVE_POLL_INTERVAL_MS = 5000; // 5s when active conversations exist
-const IDLE_POLL_INTERVAL_MS = 15000;  // 15s when all conversations are idle
+const ACTIVE_POLL_INTERVAL_MS = 1500; // 1.5s when active conversations exist
+const IDLE_POLL_INTERVAL_MS = 4000;   // 4s when all conversations are idle
 const IDLE_DETACH_GRACE_MS = 30000;   // Keep stream attached 30s after IDLE
 
 export class AgentMonitor {
