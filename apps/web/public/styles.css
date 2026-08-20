@@ -101,32 +101,47 @@ body {
 }
 
 .conversation {
-  padding: 10px 12px;
+  padding: 8px 10px;
   border: 1px solid transparent;
   border-radius: 10px;
   cursor: pointer;
   background: #111724;
-  transition: background 0.15s;
+  transition: all 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 .conversation:hover, .conversation.active {
   border-color: #3c516d;
   background: #151e2e;
 }
-.conversation strong {
+.conv-title {
   display: block;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
+  color: #e2eaf8;
 }
-.conversation small {
+.conv-ws {
+  font-size: 11px;
+  color: #79e9d2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.85;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.conv-meta {
   display: flex;
   justify-content: space-between;
   align-items: center;
   color: var(--muted);
-  margin-top: 4px;
-  font-size: 11px;
+  font-size: 10.5px;
+  margin-top: 1px;
 }
 
 .status-dot {
@@ -787,10 +802,12 @@ body.drawer-active .drawer-backdrop {
 /* Responsive Rules */
 @media (max-width: 800px) {
   body {
-    display: block;
-    position: relative;
-    width: 100vw;
-    height: 100vh;
+    display: flex;
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    height: 100dvh;
     overflow: hidden;
   }
 
@@ -802,7 +819,8 @@ body.drawer-active .drawer-backdrop {
     left: 0;
     bottom: 0;
     width: min(310px, 85vw);
-    height: 100vh;
+    height: 100%;
+    height: 100dvh;
     z-index: 1000;
     transform: translateX(-100%);
     visibility: hidden;

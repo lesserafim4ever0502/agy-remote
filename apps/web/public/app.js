@@ -593,7 +593,8 @@ async function loadStatus(){
 async function loadWorkspaces(){
   try{
     const d=await api('/api/v1/workspaces');
-    $('#workspaceSelect').innerHTML='<option value="">Current workspace</option>'+(d.workspaces||[]).map(w=>`<option value="${escapeHtml(w)}">${escapeHtml(w.replace(/^file:\/\//,''))}</option>`).join('');
+    $('#workspaceSelect').innerHTML='<option value="">All / Current workspace</option>'+(d.workspaces||[]).map(w=>`<option value="${escapeHtml(w)}">${escapeHtml(w.replace(/^file:\/\/\/?/,''))}</option>`).join('');
+    $('#workspaceSelect').onchange=loadConversations;
   }catch{}
 }
 
@@ -644,6 +645,13 @@ $$('#thinkingSegmented .seg-btn').forEach(btn=>{
   };
 });
 
+function formatWorkspace(wsUri=''){
+  if(!wsUri)return '';
+  const clean=wsUri.replace(/^file:\/\/\/?/,'').replace(/\\/g,'/');
+  const parts=clean.split('/').filter(Boolean);
+  return parts.slice(-2).join('/')||parts[0]||'';
+}
+
 async function loadConversations(){
   if(!state.token){
     $('#conversationList').innerHTML='<div class="empty-hint" style="padding: 20px 14px; text-align: center; color: var(--muted); font-size: 13px;"><p style="margin-bottom:10px;">⚠️ Device not paired</p><button type="button" class="primary-btn-sm" onclick="$(\'#tokenBtn\').click()">Enter Token</button></div>';
@@ -651,12 +659,28 @@ async function loadConversations(){
   }
   try{
     const d=await api('/api/v1/conversations');
-    const convs=d.conversations||[];
+    const filterWs=$('#workspaceSelect')?.value||'';
+    const allConvs=d.conversations||[];
+    const convs=allConvs.filter(c=>{
+      if(!filterWs)return true;
+      return c.workspace&&(c.workspace===filterWs||c.workspace.includes(filterWs)||filterWs.includes(c.workspace));
+    });
+
     if(!convs.length){
       $('#conversationList').innerHTML='<div class="empty-hint" style="padding: 20px 14px; text-align: center; color: var(--muted); font-size: 13px;">No conversations found.<br/>Click ＋ New to start.</div>';
       return;
     }
-    $('#conversationList').innerHTML=convs.map(c=>`<div class="conversation ${c.id===state.conversationId?'active':''}" data-id="${escapeHtml(c.id)}"><strong>${escapeHtml(c.title)}</strong><small><span><i class="status-dot ${c.status}"></i>${escapeHtml(c.status)}</span><span>${c.stepCount} steps</span></small></div>`).join('');
+    $('#conversationList').innerHTML=convs.map(c=>{
+      const wsDisplay=formatWorkspace(c.workspace);
+      return `<div class="conversation ${c.id===state.conversationId?'active':''}" data-id="${escapeHtml(c.id)}">
+        <strong class="conv-title">${escapeHtml(c.title||'Untitled')}</strong>
+        ${wsDisplay?`<div class="conv-ws" title="${escapeHtml(c.workspace)}">📁 ${escapeHtml(wsDisplay)}</div>`:''}
+        <small class="conv-meta">
+          <span><i class="status-dot ${c.status}"></i>${escapeHtml(c.status)}</span>
+          <span>${c.stepCount} steps</span>
+        </small>
+      </div>`;
+    }).join('');
     $$('.conversation').forEach(el=>el.onclick=()=>{
       openConversation(el.dataset.id);
       toggleDrawer(false);
