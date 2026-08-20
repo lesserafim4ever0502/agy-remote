@@ -261,14 +261,68 @@ function renderTimeline(){
   root.scrollTop=root.scrollHeight;
 }
 
+function shorten(str='',max=60){
+  const s=String(str||'').replace(/[\r\n\t]+/g,' ').trim();
+  return s.length>max?s.slice(0,max-1)+'…':s;
+}
+
 function renderEvent(e,index){
   const meta=`${e.type} · step ${e.stepIndex??'-'} · ${e.status||''}`;
   if(e.type==='user.message')return `<article class="event user"><div class="meta">${escapeHtml(meta)}</div><div>${escapeHtml(e.text)}</div></article>`;
   if(e.type==='assistant.message')return `<article class="event assistant"><div class="meta">${escapeHtml(meta)}${e.streaming?' · streaming':''}</div><div class="markdown-body">${renderMarkdown(e.text)}</div></article>`;
-  if(e.type==='task.update')return `<article class="event task"><div class="meta">${escapeHtml(e.mode||'task')}</div><strong>${escapeHtml(e.name||'Task')}</strong><div>${escapeHtml(e.taskStatus||'')}</div><small>${escapeHtml(e.summary||'')}</small></article>`;
-  if(e.type==='tool.command')return `<article class="event tool"><div class="meta">command · ${escapeHtml(e.status)}</div><pre>$ ${escapeHtml(e.command)}\n${escapeHtml(e.output||'')}</pre></article>`;
-  if(e.type==='tool.file'||e.type==='tool.search'||e.type==='browser.action')return `<article class="event tool"><div class="meta">${escapeHtml(e.type)}</div><pre>${escapeHtml(JSON.stringify(e,null,2))}</pre></article>`;
-  if(e.type==='subagent.update')return `<article class="event task"><div class="meta">subagent</div><strong>${escapeHtml(e.name||e.subagents?.[0]?.role||'Subagent')}</strong><div>${escapeHtml(e.prompt||'')}</div><small>${escapeHtml((e.results||[]).map(r=>r.conversationId).filter(Boolean).join(', '))}</small></article>`;
+  
+  if(e.type==='tool.command'){
+    const isError=e.status==='error'||e.status==='failed'||(e.exitCode!==undefined&&e.exitCode!==0);
+    const badgeClass=isError?'error':(e.status==='running'?'running':'done');
+    const badgeText=isError?'failed':(e.status||'done');
+    return `<details class="activity-row tool-cmd">
+      <summary class="activity-summary">
+        <span class="activity-icon">⚡</span>
+        <span class="activity-label">Command</span>
+        <code class="activity-cmd">${escapeHtml(shorten(e.command,55))}</code>
+        <span class="activity-badge ${badgeClass}">${escapeHtml(badgeText)}</span>
+      </summary>
+      <div class="activity-body">
+        <pre class="activity-pre">$ ${escapeHtml(e.command)}\n${escapeHtml(e.output||'')}</pre>
+      </div>
+    </details>`;
+  }
+
+  if(e.type==='tool.file'||e.type==='tool.search'||e.type==='browser.action'){
+    const icon=e.type==='tool.file'?'📝':(e.type==='tool.search'?'🔍':'🌐');
+    const label=e.type==='tool.file'?(e.action||'File'):(e.type==='tool.search'?'Search':'Browser');
+    const target=e.path||e.file||e.query||e.pattern||e.url||'';
+    return `<details class="activity-row">
+      <summary class="activity-summary">
+        <span class="activity-icon">${icon}</span>
+        <span class="activity-label">${escapeHtml(label)}</span>
+        <span class="activity-text">${escapeHtml(shorten(target,55))}</span>
+        <span class="activity-badge done">done</span>
+      </summary>
+      <div class="activity-body">
+        <pre class="activity-pre">${escapeHtml(JSON.stringify(e,null,2))}</pre>
+      </div>
+    </details>`;
+  }
+
+  if(e.type==='subagent.update'||e.type==='task.update'){
+    const name=e.name||e.subagents?.[0]?.role||(e.mode||'Task');
+    const desc=e.prompt||e.summary||'';
+    const st=e.taskStatus||e.status||'done';
+    return `<details class="activity-row">
+      <summary class="activity-summary">
+        <span class="activity-icon">🤖</span>
+        <span class="activity-label">${escapeHtml(name)}</span>
+        <span class="activity-text">${escapeHtml(shorten(desc,55))}</span>
+        <span class="activity-badge ${st==='running'?'running':'done'}">${escapeHtml(st)}</span>
+      </summary>
+      <div class="activity-body">
+        <div><strong>${escapeHtml(name)}</strong></div>
+        <p style="margin:4px 0 2px;font-size:12px;">${escapeHtml(desc)}</p>
+        ${e.results?.length?`<small style="color:var(--muted);">${escapeHtml(e.results.map(r=>r.conversationId).filter(Boolean).join(', '))}</small>`:''}
+      </div>
+    </details>`;
+  }
   
   if(e.type==='approval.required'){
     const kind=e.interaction?.kind||'generic';
