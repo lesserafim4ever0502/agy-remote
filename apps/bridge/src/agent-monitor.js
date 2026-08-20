@@ -11,7 +11,7 @@ export class AgentMonitor {
     this.logger = logger;
 
     this.monitored = new Map(); // conversationId -> { stop: fn, lastActiveAt: number, status: string }
-    this.pushedKeys = new Set(); // pushKey -> timestamp
+    this.pushedKeys = new Map(); // pushKey -> { conversationId, trajectoryId, stepIndex, kind, timestamp }
     this.activeConversations = new Set();
 
     this.running = false;
@@ -138,6 +138,12 @@ export class AgentMonitor {
       } else if (st === "idle") {
         this.activeConversations.delete(conversationId);
         if (entry) entry.status = "idle";
+        // When conversation becomes IDLE, clear all pending push keys for this conversation
+        for (const [key, item] of this.pushedKeys.entries()) {
+          if (item.conversationId === conversationId) {
+            this.pushedKeys.delete(key);
+          }
+        }
       }
     }
 
@@ -154,7 +160,13 @@ export class AgentMonitor {
       const pushKey = `${conversationId}:${trajectoryId}:${stepIndex}:${kind}`;
 
       if (!this.pushedKeys.has(pushKey)) {
-        this.pushedKeys.add(pushKey);
+        this.pushedKeys.set(pushKey, {
+          conversationId,
+          trajectoryId,
+          stepIndex,
+          kind,
+          timestamp: Date.now(),
+        });
         this.logger.info?.(`[AgentMonitor] Triggering Push Notification: ${pushKey}`);
 
         const title = isApproval ? "Antigravity Approval Required" : "Question from Agent";
@@ -176,11 +188,13 @@ export class AgentMonitor {
           this.logger.warn?.(`[AgentMonitor] Push dispatch failed: ${pushErr.message}`);
         });
       }
-    } else if (event.type === "assistant.message" || (event.type === "conversation.state" && event.state?.status === "running")) {
-      // Step progressed or resumed: clear dedupe keys for previous steps in this conversation
-      for (const k of this.pushedKeys) {
-        if (k.startsWith(`${conversationId}:`)) {
-          this.pushedKeys.delete(k);
+    } else if (event.stepIndex !== undefined) {
+      // Step advanced on this trajectory: clean up keys for older steps on the same trajectory
+      const trajectoryId = event.trajectoryId || "main";
+      const currentStep = event.stepIndex;
+      for (const [key, item] of this.pushedKeys.entries()) {
+        if (item.conversationId === conversationId && item.trajectoryId === trajectoryId && item.stepIndex < currentStep) {
+          this.pushedKeys.delete(key);
         }
       }
     }

@@ -191,10 +191,19 @@ async function api(req, res, url) {
   }
 
   if (method === "GET" && pathname === "/api/v1/workspaces") {
-    return sendJson(res, 200, { workspaces: await agy.router.listWorkspaces() });
+    await agy.router.ensure();
+    const workspaces = [
+      ...new Set(
+        agy.router.instances.flatMap((instance) => instance.workspaceUris || [])
+      ),
+    ];
+    return sendJson(res, 200, { workspaces });
   }
   if (method === "GET" && pathname === "/api/v1/models") {
     return sendJson(res, 200, { models: await agy.models.list() });
+  }
+  if (method === "GET" && pathname === "/api/v1/quota") {
+    return sendJson(res, 200, { quota: await agy.models.quota() });
   }
 
   // Conversations
@@ -233,6 +242,13 @@ async function api(req, res, url) {
     return sendJson(res, 200, await agy.conversations.stop(cascadeId));
   }
 
+  const revertMatch = pathname.match(/^\/api\/v1\/conversations\/([^/]+)\/revert$/);
+  if (revertMatch && method === "POST") {
+    const cascadeId = decodeURIComponent(revertMatch[1]);
+    const body = await readJson(req);
+    return sendJson(res, 200, await agy.conversations.revert(cascadeId, body.stepIndex, body));
+  }
+
   const interactMatch = pathname.match(/^\/api\/v1\/conversations\/([^/]+)\/interactions\/respond$/);
   if (interactMatch && method === "POST") {
     const cascadeId = decodeURIComponent(interactMatch[1]);
@@ -244,19 +260,19 @@ async function api(req, res, url) {
   if (artApproveMatch && method === "POST") {
     const cascadeId = decodeURIComponent(artApproveMatch[1]);
     const body = await readJson(req);
-    return sendJson(res, 200, await agy.interactions.respond(cascadeId, { kind: "artifactReview", approved: true, ...body }));
+    return sendJson(res, 200, await agy.conversations.approveArtifact(cascadeId, body));
   }
 
   const artRejectMatch = pathname.match(/^\/api\/v1\/conversations\/([^/]+)\/artifacts\/reject$/);
   if (artRejectMatch && method === "POST") {
     const cascadeId = decodeURIComponent(artRejectMatch[1]);
     const body = await readJson(req);
-    return sendJson(res, 200, await agy.interactions.respond(cascadeId, { kind: "artifactReview", approved: false, ...body }));
+    return sendJson(res, 200, await agy.conversations.approveArtifact(cascadeId, { ...body, approved: false }));
   }
 
   // Terminals
   if (method === "GET" && pathname === "/api/v1/terminals") {
-    return sendJson(res, 200, { terminals: await agy.terminals.list() });
+    return sendJson(res, 200, { terminals: await agy.terminals.list(url.searchParams.get("conversationId") || "") });
   }
   if (method === "POST" && pathname === "/api/v1/terminals") {
     const body = await readJson(req);
@@ -277,6 +293,12 @@ async function api(req, res, url) {
     return sendJson(res, 200, await agy.terminals.resize(terminalId, body.cols, body.rows));
   }
 
+  const termDelete = pathname.match(/^\/api\/v1\/terminals\/([^/]+)$/);
+  if (termDelete && method === "DELETE") {
+    const terminalId = decodeURIComponent(termDelete[1]);
+    return sendJson(res, 200, await agy.terminals.close(terminalId, url.searchParams.get("force") === "1"));
+  }
+
   // Browser
   if (method === "GET" && pathname === "/api/v1/browser/pages") {
     return sendJson(res, 200, { pages: await agy.browser.listPages() });
@@ -284,6 +306,12 @@ async function api(req, res, url) {
   if (method === "POST" && pathname === "/api/v1/browser/open") {
     const body = await readJson(req);
     return sendJson(res, 200, await agy.browser.open(body.url));
+  }
+
+  const pageFocus = pathname.match(/^\/api\/v1\/browser\/pages\/([^/]+)\/focus$/);
+  if (pageFocus && method === "POST") {
+    const pageId = decodeURIComponent(pageFocus[1]);
+    return sendJson(res, 200, await agy.browser.focus(pageId));
   }
 
   const pageShot = pathname.match(/^\/api\/v1\/browser\/pages\/([^/]+)\/screenshot$/);
@@ -298,22 +326,27 @@ async function api(req, res, url) {
     return sendJson(res, 200, { logs: await agy.browser.consoleLogs(pageId) });
   }
 
-  return sendError(res, 404, "Not Found");
+  return sendError(res, 404, `Not Found: ${method} ${pathname}`);
 }
 
 export const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+    if (req.method === "OPTIONS") {
+      res.writeHead(204);
+      return res.end();
+    }
     if (url.pathname.startsWith("/api/")) {
       return await api(req, res, url);
     }
-    return serveStatic(req, res, url);
+    if (serveStatic(url.pathname, res)) return;
+    return sendJson(res, 404, { error: "not_found", message: `Static file not found: ${url.pathname}` });
   } catch (error) {
     sendError(res, 500, error.message);
   }
 });
 
-// WebSocket Server (Validates One-Time WS Ticket or Bearer before 101 switch)
+// WebSocket Server (STRICTLY One-Time WS Ticket ONLY)
 server.on("upgrade", (req, socket, head) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
@@ -323,14 +356,11 @@ server.on("upgrade", (req, socket, head) => {
       return;
     }
 
-    // 1. Check one-time WS Ticket first
+    // STRICT: Only one-time WS Ticket is accepted
     const ticket = url.searchParams.get("ticket");
     const ticketValid = ticket ? consumeWsTicket(ticket) : false;
 
-    // 2. Fallback to direct Bearer authorization
-    const authValid = isAuthorized(req, url, auth.token);
-
-    if (!ticketValid && !authValid) {
+    if (!ticketValid) {
       socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
       socket.destroy();
       return;

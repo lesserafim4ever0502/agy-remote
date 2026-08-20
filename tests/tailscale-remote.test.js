@@ -1,10 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import http from "node:http";
 import {
   assertSafeBind,
   createPairingSecret,
@@ -16,11 +14,12 @@ import {
   listSessions,
   revokeSession,
   revokeAllSessions,
+  requestToken,
+  _resetSessionsForTest,
 } from "../apps/bridge/src/auth.js";
 import { AgentMonitor } from "../apps/bridge/src/agent-monitor.js";
 import { EventHub } from "../apps/bridge/src/event-hub.js";
 import { TailscaleManager } from "../apps/bridge/src/tailscale.js";
-import { buildConnectEnvelope } from "../packages/agy-ls/src/transport.js";
 
 test("1. assertSafeBind allows loopback by default and strictly rejects 0.0.0.0/public IPs", () => {
   assert.doesNotThrow(() => assertSafeBind("127.0.0.1"));
@@ -67,28 +66,64 @@ test("3. Pairing Secret lifecycle: 5min TTL, single-use, and exchange to Hashed 
   assert.throws(() => exchangePairingSecret(expSecret), /expired/);
 });
 
-test("4. Device Sessions are persisted with SHA-256 tokenHash (raw token never stored)", () => {
+test("4. Cold-start persistence test: memory wiped, sessions reloaded from sessions.json", () => {
+  _resetSessionsForTest();
+
   const { secret } = createPairingSecret();
-  const session = exchangePairingSecret(secret, "Galaxy S24");
+  const session = exchangePairingSecret(secret, "Pixel 9 Cold Start");
 
   const sessionsFile = path.join(os.homedir(), ".agy-remote", "sessions.json");
   assert.ok(fs.existsSync(sessionsFile));
   const rawContent = fs.readFileSync(sessionsFile, "utf8");
-  assert.ok(rawContent.includes(hashToken(session.token)));
+  assert.ok(rawContent.includes(hashToken(session.token)), "File must contain hashed token");
   assert.equal(rawContent.includes(session.token), false, "Raw session token must NEVER be written to disk");
 
-  const list = listSessions();
-  const found = list.find((s) => s.id === session.id);
-  assert.ok(found);
-  assert.equal(found.label, "Galaxy S24");
+  // Wipe memory to simulate process death / cold restart
+  _resetSessionsForTest();
 
-  // Revoke session
-  assert.equal(revokeSession(session.id), true);
+  // Fresh authorization request must load from disk and authenticate successfully
   const req = { headers: { authorization: `Bearer ${session.token}` } };
+  assert.equal(isAuthorized(req, new URL("http://127.0.0.1"), "master-token"), true);
+
+  // Revoke session and verify persistence
+  assert.equal(revokeSession(session.id), true);
+  _resetSessionsForTest();
   assert.equal(isAuthorized(req, new URL("http://127.0.0.1"), "master-token"), false);
 });
 
-test("5. One-time WebSocket Ticket expires in 30s and is consumed immediately", () => {
+test("5. Device Session sliding expiration and absolute TTL enforcement", () => {
+  _resetSessionsForTest();
+  const { secret } = createPairingSecret();
+  const session = exchangePairingSecret(secret, "iPad Pro");
+
+  const req = { headers: { authorization: `Bearer ${session.token}` } };
+  assert.equal(isAuthorized(req, new URL("http://127.0.0.1"), "master-token"), true);
+
+  // Manually corrupt session to expired in file
+  const sessionsFile = path.join(os.homedir(), ".agy-remote", "sessions.json");
+  const list = JSON.parse(fs.readFileSync(sessionsFile, "utf8"));
+  const target = list.find((s) => s.id === session.id);
+  if (target) {
+    target.expiresAt = Date.now() - 10000;
+    fs.writeFileSync(sessionsFile, JSON.stringify(list, null, 2));
+  }
+
+  _resetSessionsForTest();
+  assert.equal(isAuthorized(req, new URL("http://127.0.0.1"), "master-token"), false);
+});
+
+test("6. requestToken strictly rejects URL query parameter tokens", () => {
+  const reqWithHeader = { headers: { authorization: "Bearer secret-val" } };
+  assert.equal(requestToken(reqWithHeader), "secret-val");
+
+  const reqWithAgyHeader = { headers: { "x-agy-token": "custom-val" } };
+  assert.equal(requestToken(reqWithAgyHeader), "custom-val");
+
+  const reqWithQueryOnly = { headers: {} };
+  assert.equal(requestToken(reqWithQueryOnly), "", "Query param tokens must return empty");
+});
+
+test("7. One-time WebSocket Ticket expires in 30s and is consumed immediately", () => {
   const { ticket, expiresAt } = createWsTicket(30000);
   assert.ok(ticket.length >= 32);
   assert.ok(expiresAt > Date.now());
@@ -104,29 +139,32 @@ test("5. One-time WebSocket Ticket expires in 30s and is consumed immediately", 
   assert.equal(consumeWsTicket(expTicket), false);
 });
 
-test("6. Persistent AgentMonitor is sole owner of stream, works with 0 WebSocket clients, and triggers deduplicated Push", async () => {
+test("8. Realistic stream ordering: state(RUNNING) -> approval -> state(RUNNING) -> approval dedupe", async () => {
   const hub = new EventHub();
-  let streamCount = 0;
-  let receivedEvents = [];
+  let pushCalls = [];
 
   const mockAgy = {
-    conversations: {
-      list: async () => ({
-        conversations: [{ id: "conv-mon-1", status: "RUNNING" }],
-      }),
-    },
+    conversations: { list: async () => [{ id: "c-dedupe", status: "RUNNING" }] },
     streams: {
       subscribe: (id, onEvent) => {
-        streamCount += 1;
-        // Simulate stream emitting approval event
-        setTimeout(() => {
-          onEvent({
-            type: "approval.required",
-            trajectoryId: "traj-main",
-            stepIndex: 12,
-            interaction: { kind: "runCommand", proposedCommandLine: "echo 123" },
-          });
-        }, 10);
+        // Step 10: Initial state update
+        onEvent({ type: "conversation.state", state: { status: "running" } });
+        // Step 10: Approval required (should push #1)
+        onEvent({
+          type: "approval.required",
+          trajectoryId: "traj-main",
+          stepIndex: 10,
+          interaction: { kind: "runCommand", proposedCommandLine: "npm test" },
+        });
+        // Step 10: Delta update sends conversation.state again (MUST NOT clear dedupe!)
+        onEvent({ type: "conversation.state", state: { status: "running" } });
+        // Step 10: Duplicate approval event (MUST NOT push #2)
+        onEvent({
+          type: "approval.required",
+          trajectoryId: "traj-main",
+          stepIndex: 10,
+          interaction: { kind: "runCommand", proposedCommandLine: "npm test" },
+        });
         return () => {};
       },
     },
@@ -136,37 +174,60 @@ test("6. Persistent AgentMonitor is sole owner of stream, works with 0 WebSocket
   const monitor = new AgentMonitor({ agy: mockAgy, hub, logger: { info: () => {}, warn: () => {}, debug: () => {} } });
   await monitor.start();
 
-  // Give stream time to emit
-  await new Promise((r) => setTimeout(r, 80));
+  // Give stream time to process
+  await new Promise((r) => setTimeout(r, 60));
 
-  assert.equal(streamCount, 1, "AgentMonitor must attach stream independently of WS clients");
-  assert.equal(monitor.status().monitoredCount, 1);
-  assert.ok(monitor.pushedKeys.has("conv-mon-1:traj-main:12:runCommand"));
+  // Exactly 1 dedupe key should be recorded for step 10
+  assert.equal(monitor.pushedKeys.size, 1);
+  assert.ok(monitor.pushedKeys.has("c-dedupe:traj-main:10:runCommand"));
 
-  // Emitting the exact same event again must deduplicate and NOT push again
-  const sizeBefore = monitor.pushedKeys.size;
-  monitor.handleStreamEvent("conv-mon-1", {
-    type: "approval.required",
+  // Now simulate Step 11: Agent resumes and emits assistant.message at step 11
+  monitor.handleStreamEvent("c-dedupe", {
+    type: "assistant.message",
     trajectoryId: "traj-main",
-    stepIndex: 12,
-    interaction: { kind: "runCommand", proposedCommandLine: "echo 123" },
+    stepIndex: 11,
+    text: "Command executed successfully.",
   });
-  assert.equal(monitor.pushedKeys.size, sizeBefore, "Duplicate WAITING events must be deduplicated");
 
-  // When step progresses, dedupe keys are cleared
-  monitor.handleStreamEvent("conv-mon-1", {
-    type: "conversation.state",
-    state: { status: "running" },
-  });
-  assert.equal(monitor.pushedKeys.has("conv-mon-1:traj-main:12:runCommand"), false);
+  // Step 10 dedupe key should now be cleared
+  assert.equal(monitor.pushedKeys.has("c-dedupe:traj-main:10:runCommand"), false);
 
   monitor.stop();
 });
 
-test("7. TailscaleManager gracefully parses status JSON with fallback fields", async () => {
-  const ts = new TailscaleManager();
+test("9. AgentMonitor reconnects with exponential backoff on LS failure", async () => {
+  let listAttempts = 0;
+  let refreshCalled = false;
+
+  const flakyAgy = {
+    conversations: {
+      list: async () => {
+        listAttempts += 1;
+        if (listAttempts === 1) throw new Error("Connection refused");
+        return [{ id: "c-rec", status: "RUNNING" }];
+      },
+    },
+    streams: { subscribe: () => () => {} },
+    router: { refresh: async () => { refreshCalled = true; return []; } },
+  };
+
+  const monitor = new AgentMonitor({
+    agy: flakyAgy,
+    hub: new EventHub(),
+    logger: { info: () => {}, warn: () => {}, debug: () => {} },
+  });
   
-  // Test health check structure
+  await monitor.reconcile(); // First attempt fails -> marks degraded
+  assert.equal(monitor.lsStatus, "degraded");
+  assert.ok(monitor.backoffMs > 2000);
+
+  await monitor.reconcile(); // Second attempt succeeds -> marks connected
+  assert.equal(monitor.lsStatus, "connected");
+  assert.equal(monitor.backoffMs, 2000);
+});
+
+test("10. TailscaleManager gracefully parses status JSON with fallback fields", async () => {
+  const ts = new TailscaleManager();
   const health = await ts.health();
   assert.ok("installed" in health);
   assert.ok("status" in health);

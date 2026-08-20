@@ -35,11 +35,11 @@ export function hashToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
-export function requestToken(req, url) {
-  const auth = req.headers?.authorization || "";
+export function requestToken(req) {
+  const auth = req?.headers?.authorization || "";
   if (auth.startsWith("Bearer ")) return auth.slice(7).trim();
-  if (req.headers?.["x-agy-token"]) return String(req.headers["x-agy-token"]);
-  return url?.searchParams?.get("token") || "";
+  if (req?.headers?.["x-agy-token"]) return String(req.headers["x-agy-token"]);
+  return ""; // STRICT: Query parameter tokens are completely disabled
 }
 
 // ----------------------------------------------------
@@ -50,6 +50,17 @@ const sessions = new Map(); // tokenHash -> sessionRecord
 let sessionsLoaded = false;
 let sessionsDirty = false;
 let flushTimer = null;
+
+export function _resetSessionsForTest() {
+  sessions.clear();
+  pairingSecrets.clear();
+  sessionsLoaded = false;
+  sessionsDirty = false;
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+}
 
 function loadSessions() {
   if (sessionsLoaded) return;
@@ -128,6 +139,7 @@ export function exchangePairingSecret(secret, deviceLabel = "Mobile Device") {
   };
 
   sessions.set(tokenHash, session);
+  sessionsDirty = true;
   flushSessionsSync();
 
   return {
@@ -139,7 +151,7 @@ export function exchangePairingSecret(secret, deviceLabel = "Mobile Device") {
 }
 
 export function isAuthorized(req, url, masterToken) {
-  const actual = requestToken(req, url);
+  const actual = requestToken(req);
   if (!actual) return false;
 
   loadSessions();
@@ -150,6 +162,7 @@ export function isAuthorized(req, url, masterToken) {
     const now = Date.now();
     if (now > session.expiresAt || (now - session.lastUsedAt > INACTIVE_TTL_MS)) {
       sessions.delete(actualHash);
+      sessionsDirty = true;
       scheduleSessionsFlush();
       return false;
     }
@@ -184,6 +197,7 @@ export function revokeSession(id) {
   for (const [hash, s] of sessions.entries()) {
     if (s.id === id) {
       sessions.delete(hash);
+      sessionsDirty = true;
       flushSessionsSync();
       return true;
     }
@@ -195,6 +209,7 @@ export function revokeAllSessions() {
   loadSessions();
   const count = sessions.size;
   sessions.clear();
+  sessionsDirty = true;
   flushSessionsSync();
   return { revoked: count };
 }
