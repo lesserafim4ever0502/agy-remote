@@ -591,14 +591,25 @@ $$('#thinkingSegmented .seg-btn').forEach(btn=>{
 });
 
 async function loadConversations(){
+  if(!state.token){
+    $('#conversationList').innerHTML='<div class="empty-hint" style="padding: 20px 14px; text-align: center; color: var(--muted); font-size: 13px;"><p style="margin-bottom:10px;">⚠️ Device not paired</p><button type="button" class="primary-btn-sm" onclick="$(\'#tokenBtn\').click()">Enter Token</button></div>';
+    return;
+  }
   try{
     const d=await api('/api/v1/conversations');
-    $('#conversationList').innerHTML=(d.conversations||[]).map(c=>`<div class="conversation ${c.id===state.conversationId?'active':''}" data-id="${escapeHtml(c.id)}"><strong>${escapeHtml(c.title)}</strong><small><span><i class="status-dot ${c.status}"></i>${escapeHtml(c.status)}</span><span>${c.stepCount} steps</span></small></div>`).join('');
+    const convs=d.conversations||[];
+    if(!convs.length){
+      $('#conversationList').innerHTML='<div class="empty-hint" style="padding: 20px 14px; text-align: center; color: var(--muted); font-size: 13px;">No conversations found.<br/>Click ＋ New to start.</div>';
+      return;
+    }
+    $('#conversationList').innerHTML=convs.map(c=>`<div class="conversation ${c.id===state.conversationId?'active':''}" data-id="${escapeHtml(c.id)}"><strong>${escapeHtml(c.title)}</strong><small><span><i class="status-dot ${c.status}"></i>${escapeHtml(c.status)}</span><span>${c.stepCount} steps</span></small></div>`).join('');
     $$('.conversation').forEach(el=>el.onclick=()=>{
       openConversation(el.dataset.id);
       toggleDrawer(false);
     });
-  }catch{}
+  }catch(err){
+    $('#conversationList').innerHTML=`<div class="empty-hint" style="padding: 20px 14px; text-align: center; color: #ff9aa7; font-size: 13px;"><p style="margin-bottom:10px;">${escapeHtml(err.message||'Failed to load')}</p><button type="button" class="primary-btn-sm" onclick="$(\'#tokenBtn\').click()">Re-enter Token</button></div>`;
+  }
 }
 
 async function openConversation(id){
@@ -847,6 +858,7 @@ async function boot(){
   if(!state.token){
     $('#convTitle').textContent='Pairing required';
     $('#convSub').textContent='Scan the pairing QR code on your computer to connect.';
+    loadConversations();
     toast('Please scan QR code to pair this device.');
     return;
   }

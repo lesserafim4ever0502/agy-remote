@@ -279,20 +279,27 @@ button {
 .timeline {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
   padding: 12px 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
   scroll-behavior: smooth;
+  box-sizing: border-box;
 }
 .timeline.empty { justify-content: center; align-items: center; color: var(--muted); font-size: 13px; }
 
 .event {
   max-width: min(850px, 92%);
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 10px 12px;
   background: #101623;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  box-sizing: border-box;
 }
 .event.user {
   margin-left: auto;
@@ -301,16 +308,46 @@ button {
   max-width: 85%;
 }
 .event.assistant { background: #121a28; }
-.event.tool { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; background: #0b111c; }
+.event.tool {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  background: #0b111c;
+  min-width: 0;
+  max-width: 100%;
+}
 .event.task { border-left: 3px solid var(--accent2); }
 .event.approval { border-color: #7b5a28; background: #221a0f; }
 .event.error { border-color: #67323d; background: #28151b; }
 .event .meta { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 5px; }
 
+.event pre, .event.tool pre, .approval-card pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  background: #080c14;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #c4d2eb;
+}
+
 /* Markdown Body Styles */
 .markdown-body {
   line-height: 1.55;
   word-break: break-word;
+  overflow-wrap: break-word;
+  min-width: 0;
+  max-width: 100%;
   font-size: 13.5px;
 }
 .markdown-body p { margin: 5px 0; }
