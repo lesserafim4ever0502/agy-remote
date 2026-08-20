@@ -23,7 +23,9 @@ export function serveStatic(pathname, res) {
   res.writeHead(200, {
     'content-type': mime[path.extname(resolved)] || 'application/octet-stream',
     'content-length': data.length,
-    'cache-control': relative === 'index.html' ? 'no-cache' : 'public, max-age=300',
+    'cache-control': 'no-cache, no-store, must-revalidate',
+    'pragma': 'no-cache',
+    'expires': '0',
   });
   res.end(data);
   return true;

@@ -63,15 +63,12 @@ function readDaemonFiles() {
 function scanProcesses() {
   const rows = [];
   if (process.platform === 'win32') {
-    const script = [
-      "$ErrorActionPreference='SilentlyContinue'",
-      "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'language_server' -or $_.CommandLine -match 'language_server' } | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
-    ].join('; ');
+    const script = "Get-CimInstance Win32_Process | ForEach-Object { if ($_.Name -like '*language_server*' -or $_.CommandLine -like '*language_server*') { [PSCustomObject]@{ ProcessId = $_.ProcessId; CommandLine = $_.CommandLine } } } | ConvertTo-Json -Compress";
     const result = spawnSync('powershell.exe', ['-NoProfile', '-Command', script], { encoding: 'utf8', timeout: 5000 });
     if (result.status === 0 && result.stdout.trim()) {
       const parsed = safeJsonParse(result.stdout.trim(), []);
       for (const item of Array.isArray(parsed) ? parsed : [parsed]) {
-        rows.push({ pid: Number(item.ProcessId), command: item.CommandLine || '' });
+        if (item && item.ProcessId) rows.push({ pid: Number(item.ProcessId), command: item.CommandLine || '' });
       }
     }
   } else {
@@ -90,7 +87,7 @@ function scanProcesses() {
 function listeningPorts(pid) {
   const ports = new Set();
   if (process.platform === 'win32') {
-    const script = `Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -eq ${Number(pid)} } | Select-Object -ExpandProperty LocalPort | ConvertTo-Json -Compress`;
+    const script = `Get-NetTCPConnection -OwningProcess ${Number(pid)} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty LocalPort | ConvertTo-Json -Compress`;
     const result = spawnSync('powershell.exe', ['-NoProfile', '-Command', script], { encoding: 'utf8', timeout: 5000 });
     if (result.status === 0 && result.stdout.trim()) {
       const parsed = safeJsonParse(result.stdout.trim(), []);

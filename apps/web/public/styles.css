@@ -871,8 +871,8 @@ body.drawer-active .drawer-backdrop {
 
 .mobile-only { display: none; }
 
-/* Responsive Rules */
-@media (max-width: 800px) {
+/* Responsive Rules - Mobile & Tablet Fullscreen Mode */
+@media (max-width: 1080px) {
   body {
     display: flex;
     position: fixed;
