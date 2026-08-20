@@ -50,7 +50,7 @@ export class ConnectTransport {
   }
 
   async unary(instance, method, body = {}, { timeoutMs = this.timeoutMs } = {}) {
-    const protocols = instance.protocol ? [instance.protocol, instance.protocol === 'http' ? 'https' : 'http'] : ['http', 'https'];
+    const protocols = instance.protocol ? [instance.protocol] : ['http', 'https'];
     let lastError;
     for (const protocol of protocols) {
       try {
@@ -183,7 +183,7 @@ export class ConnectTransport {
       request.end(envelope);
     };
 
-    const protocols = instance.protocol ? [instance.protocol, instance.protocol === 'http' ? 'https' : 'http'] : ['http', 'https'];
+    const protocols = instance.protocol ? [instance.protocol] : ['http', 'https'];
     start(protocols);
     return controller;
   }

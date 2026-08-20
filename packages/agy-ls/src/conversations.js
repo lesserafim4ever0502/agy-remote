@@ -29,14 +29,34 @@ export class ConversationService {
     this.router = router;
     this.logger = logger;
     this.models = models;
+    this.listPromise = null;
+    this.cachedList = [];
+    this.listMeta = { stale: false, partial: false, failedInstances: 0, instanceCount: 0 };
   }
 
   async list() {
+    if (this.listPromise) return this.listPromise;
+    this.listPromise = this.#list();
+    try {
+      return await this.listPromise;
+    } finally {
+      this.listPromise = null;
+    }
+  }
+
+  getListMeta() {
+    return { ...this.listMeta };
+  }
+
+  async #list() {
     await this.router.ensure();
     const merged = new Map();
+    let succeeded = 0;
+    let failed = 0;
     await Promise.all(this.router.instances.map(async (instance) => {
       try {
         const response = await this.transport.unary(instance, 'GetAllCascadeTrajectories', { excludeSubtrajectories: false });
+        succeeded += 1;
         const raw = response.trajectorySummaries ?? response.trajectory_summaries ?? response.summaries;
         for (const [id, summary] of entriesLike(raw)) {
           if (!id) continue;
@@ -46,10 +66,30 @@ export class ConversationService {
           this.router.pinConversation(id, instance);
         }
       } catch (error) {
+        failed += 1;
         this.logger.warn?.(`[conversations] list failed on ${instance.port}: ${error.message}`);
       }
     }));
-    return [...merged.values()].sort((a, b) => String(b.lastModifiedTime || '').localeCompare(String(a.lastModifiedTime || '')));
+    const conversations = [...merged.values()].sort((a, b) => String(b.lastModifiedTime || '').localeCompare(String(a.lastModifiedTime || '')));
+    const instanceCount = this.router.instances.length;
+
+    if (succeeded === 0) {
+      this.router?.refresh?.().catch(() => {});
+      if (this.cachedList.length) {
+        this.listMeta = { stale: true, partial: true, unavailable: true, failedInstances: failed, instanceCount };
+        return this.cachedList;
+      }
+    }
+
+    this.listMeta = {
+      stale: false,
+      partial: failed > 0,
+      unavailable: succeeded === 0,
+      failedInstances: failed,
+      instanceCount,
+    };
+    if (succeeded > 0) this.cachedList = conversations;
+    return conversations;
   }
 
   async snapshot(cascadeId) {
