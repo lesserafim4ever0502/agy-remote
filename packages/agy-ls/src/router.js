@@ -12,13 +12,33 @@ export class AgyRouter {
     this.instances = [];
     this.ownerMap = new Map();
     this.pinned = new Map();
+    this.refreshPromise = null;
+    this.lastRefreshAt = 0;
   }
 
-  async refresh() {
-    this.instances = await discoverLanguageServers(this.transport, { logger: this.logger });
-    if (this.instances.length === 0) throw new Error('No reachable Antigravity Language Server found');
-    await this.refreshOwners();
-    return this.instances;
+  async refresh({ maxAgeMs = 0 } = {}) {
+    if (maxAgeMs > 0 && this.instances.length && Date.now() - this.lastRefreshAt < maxAgeMs) return this.instances;
+    if (this.refreshPromise) return this.refreshPromise;
+
+    this.refreshPromise = (async () => {
+      const discovered = await discoverLanguageServers(this.transport, { logger: this.logger });
+      if (discovered.length === 0) {
+        this.instances = [];
+        this.ownerMap.clear();
+        this.lastRefreshAt = Date.now();
+        throw new Error('No reachable Antigravity Language Server found');
+      }
+      this.instances = discovered;
+      await this.refreshOwners();
+      this.lastRefreshAt = Date.now();
+      return this.instances;
+    })();
+
+    try {
+      return await this.refreshPromise;
+    } finally {
+      this.refreshPromise = null;
+    }
   }
 
   async ensure() {
