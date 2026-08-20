@@ -60,13 +60,26 @@ function readDaemonFiles() {
   return instances;
 }
 
+function runPowerShell(scriptText, timeout = 10000) {
+  try {
+    const b64 = Buffer.from(scriptText, 'utf16le').toString('base64');
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', b64], {
+      encoding: 'utf8',
+      timeout,
+    });
+    if (result.status === 0 && result.stdout && result.stdout.trim()) {
+      return safeJsonParse(result.stdout.trim(), null);
+    }
+  } catch {}
+  return null;
+}
+
 function scanProcesses() {
   const rows = [];
   if (process.platform === 'win32') {
     const script = "Get-CimInstance Win32_Process | ForEach-Object { if ($_.Name -like '*language_server*' -or $_.CommandLine -like '*language_server*') { [PSCustomObject]@{ ProcessId = $_.ProcessId; CommandLine = $_.CommandLine } } } | ConvertTo-Json -Compress";
-    const result = spawnSync('powershell.exe', ['-NoProfile', '-Command', script], { encoding: 'utf8', timeout: 5000 });
-    if (result.status === 0 && result.stdout.trim()) {
-      const parsed = safeJsonParse(result.stdout.trim(), []);
+    const parsed = runPowerShell(script, 10000);
+    if (parsed) {
       for (const item of Array.isArray(parsed) ? parsed : [parsed]) {
         if (item && item.ProcessId) rows.push({ pid: Number(item.ProcessId), command: item.CommandLine || '' });
       }
@@ -88,9 +101,8 @@ function listeningPorts(pid) {
   const ports = new Set();
   if (process.platform === 'win32') {
     const script = `Get-NetTCPConnection -OwningProcess ${Number(pid)} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty LocalPort | ConvertTo-Json -Compress`;
-    const result = spawnSync('powershell.exe', ['-NoProfile', '-Command', script], { encoding: 'utf8', timeout: 5000 });
-    if (result.status === 0 && result.stdout.trim()) {
-      const parsed = safeJsonParse(result.stdout.trim(), []);
+    const parsed = runPowerShell(script, 8000);
+    if (parsed) {
       for (const port of Array.isArray(parsed) ? parsed : [parsed]) if (Number(port) > 0) ports.add(Number(port));
     }
   } else {
