@@ -53,31 +53,29 @@ async function main() {
   const ts = new TailscaleManager();
   const installed = await ts.detectInstalled();
 
+  let httpsUrl = null;
   if (!installed) {
-    console.error("[!] Tailscale CLI is not installed or not in PATH.");
-    console.error("    Please install Tailscale from https://tailscale.com/download");
-    console.error("    After installation and login, rerun: npm run remote:setup\n");
-    process.exit(1);
-  }
-  console.log("[✓] Tailscale CLI detected.");
-
-  const status = await ts.status();
-  if (!status.ok || !status.online) {
-    console.error("[!] Tailscale is offline or not logged in.");
-    console.error("    Please run `tailscale up` or log into your Tailscale client.");
-    console.error("    After logging in, rerun: npm run remote:setup\n");
-    process.exit(1);
-  }
-  console.log(`[✓] Tailscale connected. Node: ${status.dnsName || "local"}`);
-
-  console.log("[*] Configuring Tailscale HTTPS Serve for port 7317...");
-  const serveRes = await ts.enableServe(7317);
-  if (!serveRes.ok) {
-    console.warn(`[!] Note on Tailscale Serve: ${serveRes.error}`);
-    console.warn("    If this is your first time enabling HTTPS, Tailscale may require web authorization.");
-    console.warn("    Run: `tailscale serve --bg 7317` and follow the authorization prompt.");
+    console.warn("[!] Tailscale CLI is not installed or not in PATH.");
+    console.warn("    To access remotely over 5G/WAN without port forwarding, install Tailscale:");
+    console.warn("    https://tailscale.com/download (then log in and rerun `npm run remote:setup`)");
+    console.warn("    Proceeding in Localhost mode...\n");
   } else {
-    console.log("[✓] Tailscale Serve configured in background (--bg 7317).");
+    console.log("[✓] Tailscale CLI detected.");
+    const status = await ts.status();
+    if (!status.ok || !status.online) {
+      console.warn("[!] Tailscale is offline or not logged in.");
+      console.warn("    Run `tailscale up` to connect to your tailnet.\n");
+    } else {
+      console.log(`[✓] Tailscale connected. Node: ${status.dnsName || "local"}`);
+      console.log("[*] Configuring Tailscale HTTPS Serve for port 7317...");
+      const serveRes = await ts.enableServe(7317);
+      if (!serveRes.ok) {
+        console.warn(`[!] Tailscale Serve note: ${serveRes.error}`);
+      } else {
+        console.log("[✓] Tailscale Serve configured in background (--bg 7317).");
+      }
+      httpsUrl = await ts.getHttpsUrl();
+    }
   }
 
   // Ensure Bridge is running
@@ -107,17 +105,17 @@ async function main() {
     process.exit(1);
   }
 
-  const httpsUrl = await ts.getHttpsUrl();
   const targetBase = httpsUrl || "http://127.0.0.1:7317";
   const pairUrl = `${targetBase}/#pair=${secret}`;
 
   console.log("\n--------------------------------------------------");
-  console.log(`Remote HTTPS Base:  ${httpsUrl || "http://127.0.0.1:7317 (local only)"}`);
+  console.log(`Access Base:        ${targetBase}`);
   console.log(`Pairing URL (5m):   ${pairUrl}`);
   console.log("--------------------------------------------------\n");
 
+  const qrFilePath = path.join(process.cwd(), "pairing-qr.png");
   try {
-    const qrFilePath = await generatePairingQrFile(pairUrl);
+    await generatePairingQrFile(pairUrl, qrFilePath);
     console.log(`[✓] Pairing QR image generated at:\n    ${qrFilePath}\n`);
   } catch {}
 
@@ -127,8 +125,11 @@ async function main() {
   } catch {}
 
   console.log("\n==================================================");
-  console.log("Security: Bridge binds 127.0.0.1 only. Tailscale handles WireGuard encryption & HTTPS.");
-  console.log("Setup complete! Your remote PWA is ready for daily use.\n");
+  console.log("Security: Bridge binds 127.0.0.1 only.");
+  if (httpsUrl) {
+    console.log("Tailscale handles WireGuard encryption & HTTPS certificates.");
+  }
+  console.log("Setup complete! Your remote PWA is ready for acceptance.\n");
 }
 
 main().catch((err) => {

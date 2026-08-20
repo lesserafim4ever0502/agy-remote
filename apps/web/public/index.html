@@ -7,7 +7,7 @@
   <title>Agy Remote</title>
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/styles.css?v=1.0.5" />
+  <link rel="stylesheet" href="/styles.css?v=1.1.0" />
 </head>
 <body>
   <div id="drawerBackdrop" class="drawer-backdrop"></div>
@@ -17,11 +17,11 @@
     <div class="sidebar-header">
       <div class="sidebar-title">
         <span class="orb-sm"></span>
-        <h2>Conversations</h2>
+        <h2>Workspace</h2>
       </div>
       <div class="sidebar-actions">
-        <button id="refreshConversations" class="icon-btn" title="Refresh">↻</button>
-        <button id="closeDrawerBtn" class="icon-btn mobile-only" title="Close">✕</button>
+        <button id="refreshConversations" class="icon-btn" title="Refresh conversations" aria-label="Refresh conversations">↻</button>
+        <button id="closeDrawerBtn" class="icon-btn mobile-only" title="Close sidebar" aria-label="Close sidebar">✕</button>
       </div>
     </div>
     <div class="workspace-bar">
@@ -35,7 +35,7 @@
   <div class="app-shell">
     <header class="topbar">
       <div class="brand">
-        <button id="drawerBtn" class="icon-btn mobile-only" title="Open Conversations">☰</button>
+        <button id="drawerBtn" class="icon-btn mobile-only" title="Open conversations" aria-label="Open conversations">☰</button>
         <span class="orb"></span>
         <div>
           <strong>Agy Remote</strong>
@@ -43,15 +43,15 @@
         </div>
       </div>
       <div class="topbar-actions">
-        <button id="notifyBtn" class="icon-btn" title="Push Notifications">🔔</button>
-        <button id="tokenBtn" class="ghost-btn">Token</button>
+        <button id="notifyBtn" class="icon-btn" title="Push notifications" aria-label="Push notifications">◉</button>
+        <button id="tokenBtn" class="ghost-btn">Pair device</button>
       </div>
     </header>
 
     <nav class="tabs">
-      <button class="tab active" data-tab="agent">💬 Agent</button>
-      <button class="tab" data-tab="terminal">💻 Terminal</button>
-      <button class="tab" data-tab="browser">🌐 Browser</button>
+      <button class="tab active" data-tab="agent"><span class="tab-mark" aria-hidden="true">A</span>Agent</button>
+      <button class="tab" data-tab="terminal"><span class="tab-mark" aria-hidden="true">›_</span>Terminal</button>
+      <button class="tab" data-tab="browser"><span class="tab-mark" aria-hidden="true">○</span>Browser</button>
     </nav>
 
     <main class="main-content">
@@ -61,16 +61,16 @@
           <div id="conversationHeader" class="content-head">
             <div class="head-info">
               <h2 id="convTitle">Select a conversation</h2>
-              <small id="convSub">Live from StreamAgentStateUpdates</small>
+              <small id="convSub">Live session activity</small>
             </div>
             <button id="stopBtn" class="danger-btn" disabled>Stop</button>
           </div>
-          <div id="timeline" class="timeline empty">No conversation selected. Tap ☰ to pick or create one.</div>
+          <div id="timeline" class="timeline empty">Select a conversation from the workspace to begin.</div>
           <form id="composer" class="composer">
             <div class="model-bar">
               <select id="baseModelSelect" title="Select Model"><option value="">Default model</option></select>
               <div class="thinking-selector" id="thinkingSelector">
-                <span class="thinking-icon" title="Thinking Budget">🧠</span>
+                <span class="thinking-label" title="Thinking budget">Thinking</span>
                 <div class="segmented-control" id="thinkingSegmented">
                   <button type="button" class="seg-btn" data-val="low">Low</button>
                   <button type="button" class="seg-btn" data-val="medium">Med</button>
@@ -132,6 +132,6 @@
   </div>
 
   <div id="toast" class="toast"></div>
-  <script type="module" src="/app.js?v=1.0.5"></script>
+  <script type="module" src="/app.js?v=1.1.0"></script>
 </body>
 </html>
