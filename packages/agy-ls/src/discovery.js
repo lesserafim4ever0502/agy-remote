@@ -164,10 +164,7 @@ function dedupe(instances) {
 
 export async function discoverLanguageServers(transport, { logger = console } = {}) {
   const forced = manualInstance();
-  let candidates = forced ? [forced] : readDaemonFiles();
-  if (!forced && (candidates.length === 0 || boolEnv('AGY_DISCOVERY_PROCESS_SCAN', false))) {
-    candidates.push(...processInstances());
-  }
+  let candidates = forced ? [forced] : [...readDaemonFiles(), ...processInstances()];
   candidates = dedupe(candidates);
 
   const valid = [];
@@ -180,6 +177,9 @@ export async function discoverLanguageServers(transport, { logger = console } = 
         .map((info) => info.workspaceUri || info.workspace_uri)
         .filter(Boolean);
       instance.homeDirPath = response.homeDirPath || response.home_dir_path;
+      
+      // Verify GetAllCascadeTrajectories works
+      await transport.unary(instance, 'GetAllCascadeTrajectories', { excludeSubtrajectories: false }, { timeoutMs: 1500 });
       valid.push(instance);
       if (instance.pid > 0) seenPids.add(instance.pid);
     } catch (error) {
