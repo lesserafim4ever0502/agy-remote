@@ -11,7 +11,12 @@ const state={
   terminalText:'',
   selectedPageId:null,
   modelFamilies:new Map(),
-  selectedThinking:'high'
+  selectedThinking:'high',
+  conversationRequest:0,
+  conversationTitles:new Map(),
+  modelsLoaded:false,
+  modelsLoading:false,
+  nextModelRetryAt:0
 };
 
 async function checkPairing(){
@@ -209,7 +214,10 @@ function unsubscribe(channel,resourceId){
 }
 
 function eventKey(e){
-  return `${e.type}:${e.stepIndex??e.messageId??Math.random()}`;
+  const identity=e.stepIndex??e.messageId??e.trajectoryId??e.taskId??e.timestamp;
+  if(identity!==undefined&&identity!==null)return `${e.type}:${identity}`;
+  const detail=e.path||e.file||e.command||e.query||e.url||e.artifactUri||e.text||'';
+  return `${e.type}:${detail}`;
 }
 
 function handleEvent(message){
@@ -252,7 +260,25 @@ function handleEvent(message){
   }
 }
 
-function renderTimeline(){
+function isNearTimelineBottom(root,threshold=96){
+  return root.scrollHeight-root.scrollTop-root.clientHeight<=threshold;
+}
+
+function eventSignature(event){
+  return JSON.stringify(event);
+}
+
+function createEventNode(event,key,{animate=false}={}){
+  const template=document.createElement('template');
+  template.innerHTML=renderEvent(event,key).trim();
+  const node=template.content.firstElementChild;
+  node.dataset.eventKey=key;
+  node.dataset.eventSignature=eventSignature(event);
+  if(animate)node.classList.add('timeline-item-new');
+  return node;
+}
+
+function renderTimeline({forceScroll=false,animateNew=true}={}){
   const root=$('#timeline');
   const events=[...state.events.values()].sort((a,b)=>(a.stepIndex??0)-(b.stepIndex??0));
   if(!events.length){
@@ -260,10 +286,64 @@ function renderTimeline(){
     root.textContent='No visible events.';
     return;
   }
+  const shouldStick=forceScroll||isNearTimelineBottom(root);
+  if(root.classList.contains('empty'))root.textContent='';
   root.className='timeline';
-  root.innerHTML=events.map((e,idx)=>renderEvent(e,idx)).join('');
-  bindEventActions(events);
-  root.scrollTop=root.scrollHeight;
+  const existing=new Map([...root.children].map(node=>[node.dataset.eventKey,node]));
+  const activeKeys=new Set();
+  let cursor=root.firstElementChild;
+
+  for(const event of events){
+    const key=eventKey(event);
+    const signature=eventSignature(event);
+    activeKeys.add(key);
+    let node=existing.get(key);
+    if(!node){
+      node=createEventNode(event,key,{animate:animateNew});
+    }else if(node.dataset.eventSignature!==signature){
+      const wasCursor=node===cursor;
+      const replacement=createEventNode(event,key);
+      if(node instanceof HTMLDetailsElement&&replacement instanceof HTMLDetailsElement)replacement.open=node.open;
+      node.replaceWith(replacement);
+      node=replacement;
+      if(wasCursor)cursor=node;
+    }
+
+    if(node!==cursor)root.insertBefore(node,cursor);
+    cursor=node.nextElementSibling;
+  }
+
+  for(const [key,node] of existing)if(!activeKeys.has(key))node.remove();
+  bindEventActions();
+  if(shouldStick)requestAnimationFrame(()=>{root.scrollTop=root.scrollHeight;});
+}
+
+function fileLangBadge(filename = '') {
+  const ext = String(filename || '').split('.').pop()?.toLowerCase() || '';
+  if (['js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx'].includes(ext)) return { tag: 'JS', cls: 'badge-js' };
+  if (['css', 'scss', 'less', 'json', 'yaml', 'yml'].includes(ext)) return { tag: '{}', cls: 'badge-json' };
+  if (['html', 'htm', 'xml', 'svg'].includes(ext)) return { tag: '<>', cls: 'badge-html' };
+  if (['py'].includes(ext)) return { tag: 'PY', cls: 'badge-py' };
+  if (['md', 'txt', 'log'].includes(ext)) return { tag: 'MD', cls: 'badge-md' };
+  if (['sh', 'bash', 'ps1', 'bat', 'cmd'].includes(ext)) return { tag: '⚡', cls: 'badge-cmd' };
+  return { tag: '📄', cls: 'badge-file' };
+}
+
+function cleanBasename(uriOrPath = '') {
+  if (!uriOrPath) return '';
+  const clean = String(uriOrPath).replace(/^file:\/\/\/?/i, '').replace(/\\/g, '/');
+  const parts = clean.split('/');
+  return parts[parts.length - 1] || clean;
+}
+
+function formatLineRange(start, end) {
+  if (start !== undefined && end !== undefined && start !== null && end !== null && Number(start) > 0 && Number(end) > 0) {
+    return `#L${start}-${end}`;
+  }
+  if (start !== undefined && start !== null && Number(start) > 0) {
+    return `#L${start}`;
+  }
+  return '';
 }
 
 function shorten(str='',max=60){
@@ -271,62 +351,101 @@ function shorten(str='',max=60){
   return s.length>max?s.slice(0,max-1)+'…':s;
 }
 
-function renderEvent(e,index){
+function renderEvent(e,key){
   const meta=`${e.type} · step ${e.stepIndex??'-'} · ${e.status||''}`;
   if(e.type==='user.message')return `<article class="event user"><div class="meta">${escapeHtml(meta)}</div><div>${escapeHtml(e.text)}</div></article>`;
   if(e.type==='assistant.message')return `<article class="event assistant"><div class="meta">${escapeHtml(meta)}${e.streaming?' · streaming':''}</div><div class="markdown-body">${renderMarkdown(e.text)}</div></article>`;
   
   if(e.type==='tool.command'){
     const isError=e.status==='error'||e.status==='failed'||(e.exitCode!==undefined&&e.exitCode!==0);
-    const badgeClass=isError?'error':(e.status==='running'?'running':'done');
-    const badgeText=isError?'failed':(e.status||'done');
-    return `<details class="activity-row tool-cmd">
-      <summary class="activity-summary">
-        <span class="activity-icon">⚡</span>
-        <span class="activity-label">Command</span>
-        <code class="activity-cmd">${escapeHtml(shorten(e.command,55))}</code>
-        <span class="activity-badge ${badgeClass}">${escapeHtml(badgeText)}</span>
-      </summary>
-      <div class="activity-body">
+    const badgeText=isError?'failed':(e.status==='running'?'running':'');
+    return `<article class="activity-row tool-cmd">
+      <button type="button" class="activity-summary" aria-expanded="false">
+        <span class="step-verb">Ran</span>
+        <span class="step-badge badge-cmd">⚡</span>
+        <code class="step-cmd">${escapeHtml(shorten(e.command,55)||'Preparing command…')}</code>
+        ${badgeText?`<span class="step-status ${isError?'error':'running'}">${escapeHtml(badgeText)}</span>`:''}
+      </button>
+      <div class="activity-body" hidden>
         <pre class="activity-pre">$ ${escapeHtml(e.command)}\n${escapeHtml(e.output||'')}</pre>
       </div>
-    </details>`;
+    </article>`;
   }
 
-  if(e.type==='tool.file'||e.type==='tool.search'||e.type==='browser.action'){
-    const icon=e.type==='tool.file'?'📝':(e.type==='tool.search'?'🔍':'🌐');
-    const label=e.type==='tool.file'?(e.action||'File'):(e.type==='tool.search'?'Search':'Browser');
-    const target=e.path||e.file||e.query||e.pattern||e.url||'';
-    return `<details class="activity-row">
-      <summary class="activity-summary">
-        <span class="activity-icon">${icon}</span>
-        <span class="activity-label">${escapeHtml(label)}</span>
-        <span class="activity-text">${escapeHtml(shorten(target,55))}</span>
-        <span class="activity-badge done">done</span>
-      </summary>
-      <div class="activity-body">
+  if(e.type==='tool.file'){
+    const rawTarget=e.fileUri||e.path||e.file||'';
+    const filename=cleanBasename(rawTarget);
+    const badge=fileLangBadge(filename);
+    const lines=formatLineRange(e.startLine,e.endLine);
+    const verb=e.action==='edit'?'Edited':(e.action==='list'?'Listed':'Analyzed');
+    const isRunning=e.status==='running';
+    return `<article class="activity-row">
+      <button type="button" class="activity-summary" aria-expanded="false">
+        <span class="step-verb">${escapeHtml(verb)}</span>
+        <span class="step-badge ${badge.cls}">${badge.tag}</span>
+        <strong class="step-file">${escapeHtml(filename||'file')}</strong>
+        ${lines?`<span class="step-lines">${escapeHtml(lines)}</span>`:''}
+        ${isRunning?`<span class="step-status running">working…</span>`:''}
+      </button>
+      <div class="activity-body" hidden>
+        <pre class="activity-pre">${escapeHtml(rawTarget||e.description||'')}</pre>
+      </div>
+    </article>`;
+  }
+
+  if(e.type==='tool.search'){
+    const isGrep=e.action==='grep';
+    const query=e.query||'';
+    const path=e.path?cleanBasename(e.path):'';
+    const isRunning=e.status==='running';
+    return `<article class="activity-row">
+      <button type="button" class="activity-summary" aria-expanded="false">
+        <span class="step-verb">Searched</span>
+        <span class="step-badge badge-search">🔍</span>
+        <span class="step-query">&apos;${escapeHtml(shorten(query,40))}&apos;</span>
+        ${path?`<span class="step-target">in ${escapeHtml(path)}</span>`:''}
+        ${isRunning?`<span class="step-status running">working…</span>`:''}
+      </button>
+      <div class="activity-body" hidden>
         <pre class="activity-pre">${escapeHtml(JSON.stringify(e,null,2))}</pre>
       </div>
-    </details>`;
+    </article>`;
+  }
+
+  if(e.type==='browser.action'){
+    const isRunning=e.status==='running';
+    return `<article class="activity-row">
+      <button type="button" class="activity-summary" aria-expanded="false">
+        <span class="step-verb">Browser</span>
+        <span class="step-badge badge-browser">🌐</span>
+        <span class="step-query">${escapeHtml(e.action||'action')}</span>
+        ${e.url?`<span class="step-target">${escapeHtml(shorten(e.url,45))}</span>`:''}
+        ${isRunning?`<span class="step-status running">working…</span>`:''}
+      </button>
+      <div class="activity-body" hidden>
+        <pre class="activity-pre">${escapeHtml(JSON.stringify(e,null,2))}</pre>
+      </div>
+    </article>`;
   }
 
   if(e.type==='subagent.update'||e.type==='task.update'){
     const name=e.name||e.subagents?.[0]?.role||(e.mode||'Task');
     const desc=e.prompt||e.summary||'';
     const st=e.taskStatus||e.status||'done';
-    return `<details class="activity-row">
-      <summary class="activity-summary">
-        <span class="activity-icon">🤖</span>
-        <span class="activity-label">${escapeHtml(name)}</span>
-        <span class="activity-text">${escapeHtml(shorten(desc,55))}</span>
-        <span class="activity-badge ${st==='running'?'running':'done'}">${escapeHtml(st)}</span>
-      </summary>
-      <div class="activity-body">
+    return `<article class="activity-row">
+      <button type="button" class="activity-summary" aria-expanded="false">
+        <span class="step-verb">Agent</span>
+        <span class="step-badge badge-agent">🤖</span>
+        <strong class="step-file">${escapeHtml(name)}</strong>
+        <span class="step-target">${escapeHtml(shorten(desc,45))}</span>
+        ${st==='running'?`<span class="step-status running">running</span>`:''}
+      </button>
+      <div class="activity-body" hidden>
         <div><strong>${escapeHtml(name)}</strong></div>
         <p style="margin:4px 0 2px;font-size:12px;">${escapeHtml(desc)}</p>
         ${e.results?.length?`<small style="color:var(--muted);">${escapeHtml(e.results.map(r=>r.conversationId).filter(Boolean).join(', '))}</small>`:''}
       </div>
-    </details>`;
+    </article>`;
   }
   
   if(e.type==='approval.required'){
@@ -339,10 +458,10 @@ function renderEvent(e,index){
           <div><strong>File:</strong> <code>${escapeHtml(inter.path||'')}</code></div>
           ${inter.reason?`<div><small>Reason: ${escapeHtml(inter.reason)}</small></div>`:''}
           <div class="actions-wrap">
-            <button class="primary-btn" data-act="file" data-idx="${index}" data-scope="PERMISSION_SCOPE_ONCE" data-allow="1">Allow Once</button>
-            <button class="ghost-btn" data-act="file" data-idx="${index}" data-scope="PERMISSION_SCOPE_CONVERSATION" data-allow="1">Allow Session</button>
-            <button class="ghost-btn" data-act="file" data-idx="${index}" data-scope="PERMISSION_SCOPE_WORKSPACE" data-allow="1">Allow Workspace</button>
-            <button class="danger-btn" data-act="file" data-idx="${index}" data-allow="0">Reject</button>
+            <button class="primary-btn" data-act="file" data-scope="PERMISSION_SCOPE_ONCE" data-allow="1">Allow Once</button>
+            <button class="ghost-btn" data-act="file" data-scope="PERMISSION_SCOPE_CONVERSATION" data-allow="1">Allow Session</button>
+            <button class="ghost-btn" data-act="file" data-scope="PERMISSION_SCOPE_WORKSPACE" data-allow="1">Allow Workspace</button>
+            <button class="danger-btn" data-act="file" data-allow="0">Reject</button>
           </div>
         </div>
       </article>`;
@@ -354,10 +473,10 @@ function renderEvent(e,index){
         <div class="approval-card">
           <div><strong>Proposed Command:</strong></div>
           <pre>$ ${escapeHtml(cmd)}</pre>
-          <div><label><small>Edit Command before running:</small></label><input id="cmd_input_${index}" value="${escapeHtml(cmd)}" /></div>
+          <div><label><small>Edit Command before running:</small></label><input data-command-input value="${escapeHtml(cmd)}" /></div>
           <div class="actions-wrap">
-            <button class="primary-btn" data-act="cmd" data-idx="${index}" data-allow="1">Run Command</button>
-            <button class="danger-btn" data-act="cmd" data-idx="${index}" data-allow="0">Reject</button>
+            <button class="primary-btn" data-act="cmd" data-allow="1">Run Command</button>
+            <button class="danger-btn" data-act="cmd" data-allow="0">Reject</button>
           </div>
         </div>
       </article>`;
@@ -366,7 +485,7 @@ function renderEvent(e,index){
       const questions=inter.questions||[];
       return `<article class="event approval">
         <div class="meta">question from agent · step ${e.stepIndex??'-'}</div>
-        <div class="approval-card" id="q_card_${index}">
+        <div class="approval-card">
           ${questions.map((q,qIdx)=>`
             <div class="question-item">
               <span class="question-label">${escapeHtml(q.question||q.prompt||`Question ${qIdx+1}`)}</span>
@@ -374,18 +493,18 @@ function renderEvent(e,index){
                 <div class="options-group">
                   ${q.options.map((opt,oIdx)=>`
                     <label class="option-label">
-                      <input type="${q.isMultiSelect?'checkbox':'radio'}" name="q_opt_${index}_${qIdx}" value="${escapeHtml(opt)}" />
+                      <input type="${q.isMultiSelect?'checkbox':'radio'}" name="q_opt_${escapeHtml(key)}_${qIdx}" data-question-index="${qIdx}" value="${escapeHtml(opt)}" />
                       <span>${escapeHtml(opt)}</span>
                     </label>
                   `).join('')}
                 </div>
               `:''}
-              <input placeholder="Type answer or notes…" id="q_ans_${index}_${qIdx}" />
+              <input placeholder="Type answer or notes…" data-question-answer="${qIdx}" />
             </div>
           `).join('')}
           <div class="actions-wrap">
-            <button class="primary-btn" data-act="question" data-idx="${index}" data-allow="1">Submit Answer</button>
-            <button class="ghost-btn" data-act="question" data-idx="${index}" data-allow="0">Cancel</button>
+            <button class="primary-btn" data-act="question" data-allow="1">Submit Answer</button>
+            <button class="ghost-btn" data-act="question" data-allow="0">Cancel</button>
           </div>
         </div>
       </article>`;
@@ -397,10 +516,10 @@ function renderEvent(e,index){
       <div class="meta">artifact review · step ${e.stepIndex??'-'}</div>
       <div class="approval-card">
         <div><strong>Artifact:</strong> <code>${escapeHtml(e.artifactUri||'')}</code></div>
-        <div><label><small>Review Feedback (optional):</small></label><input id="artifact_comment_${index}" placeholder="Leave comment…" /></div>
+        <div><label><small>Review Feedback (optional):</small></label><input data-artifact-comment placeholder="Leave comment…" /></div>
         <div class="actions-wrap">
-          <button class="primary-btn" data-act="artifact" data-idx="${index}" data-allow="1">Approve Artifact</button>
-          <button class="danger-btn" data-act="artifact" data-idx="${index}" data-allow="0">Reject</button>
+          <button class="primary-btn" data-act="artifact" data-allow="1">Approve Artifact</button>
+          <button class="danger-btn" data-act="artifact" data-allow="0">Reject</button>
         </div>
       </div>
     </article>`;
@@ -411,10 +530,28 @@ function renderEvent(e,index){
   return `<article class="event"><div class="meta">${escapeHtml(e.type)}</div><pre>${escapeHtml(JSON.stringify(e,null,2))}</pre></article>`;
 }
 
-function bindEventActions(events){
+function eventForAction(element){
+  const key=element.closest('[data-event-key]')?.dataset.eventKey;
+  return key?state.events.get(key):undefined;
+}
+
+function bindEventActions(){
+  $$('.activity-summary').forEach(summary=>{
+    summary.onclick=()=>{
+      const row=summary.closest('.activity-row');
+      const body=row?.querySelector('.activity-body');
+      if(!row||!body)return;
+      const expanded=summary.getAttribute('aria-expanded')==='true';
+      summary.setAttribute('aria-expanded',String(!expanded));
+      row.classList.toggle('expanded',!expanded);
+      body.hidden=expanded;
+    };
+  });
+
   $$('[data-act="file"]').forEach(btn=>{
     btn.onclick=async()=>{
-      const ev=events[Number(btn.dataset.idx)];
+      const ev=eventForAction(btn);
+      if(!ev)return;
       const allow=btn.dataset.allow==='1';
       const scope=btn.dataset.scope||'PERMISSION_SCOPE_ONCE';
       try{
@@ -438,10 +575,10 @@ function bindEventActions(events){
 
   $$('[data-act="cmd"]').forEach(btn=>{
     btn.onclick=async()=>{
-      const idx=Number(btn.dataset.idx);
-      const ev=events[idx];
+      const ev=eventForAction(btn);
+      if(!ev)return;
       const allow=btn.dataset.allow==='1';
-      const editedCmd=$(`#cmd_input_${idx}`)?.value||ev.interaction?.proposedCommandLine;
+      const editedCmd=btn.closest('[data-event-key]')?.querySelector('[data-command-input]')?.value||ev.interaction?.proposedCommandLine;
       try{
         await api(`/api/v1/conversations/${encodeURIComponent(state.conversationId)}/interactions/respond`,{
           method:'POST',
@@ -463,8 +600,9 @@ function bindEventActions(events){
 
   $$('[data-act="question"]').forEach(btn=>{
     btn.onclick=async()=>{
-      const idx=Number(btn.dataset.idx);
-      const ev=events[idx];
+      const ev=eventForAction(btn);
+      if(!ev)return;
+      const eventNode=btn.closest('[data-event-key]');
       const allow=btn.dataset.allow==='1';
       if(!allow){
         try{
@@ -488,8 +626,8 @@ function bindEventActions(events){
       const questions=ev.interaction?.questions||[];
       const responses=[];
       questions.forEach((q,qIdx)=>{
-        const checked=$$(`input[name="q_opt_${idx}_${qIdx}"]:checked`).map(x=>x.value);
-        const typed=$(`#q_ans_${idx}_${qIdx}`)?.value?.trim();
+        const checked=[...eventNode.querySelectorAll(`[data-question-index="${qIdx}"]:checked`)].map(x=>x.value);
+        const typed=eventNode.querySelector(`[data-question-answer="${qIdx}"]`)?.value?.trim();
         const answers=[...checked];
         if(typed&&!answers.includes(typed))answers.push(typed);
         responses.push(answers.length?answers:['']);
@@ -515,10 +653,10 @@ function bindEventActions(events){
 
   $$('[data-act="artifact"]').forEach(btn=>{
     btn.onclick=async()=>{
-      const idx=Number(btn.dataset.idx);
-      const ev=events[idx];
+      const ev=eventForAction(btn);
+      if(!ev)return;
       const approved=btn.dataset.allow==='1';
-      const comment=$(`#artifact_comment_${idx}`)?.value||'';
+      const comment=btn.closest('[data-event-key]')?.querySelector('[data-artifact-comment]')?.value||'';
       try{
         const endpoint=approved?'approve':'reject';
         await api(`/api/v1/conversations/${encodeURIComponent(state.conversationId)}/artifacts/${endpoint}`,{
@@ -604,10 +742,19 @@ async function loadWorkspaces(){
 }
 
 // Models vs Thinking Intensity Decoupling
-async function loadModels(){
+async function loadModels({force=false}={}){
+  if(state.modelsLoading)return;
+  if(!force&&Date.now()<state.nextModelRetryAt)return;
+  const select=$('#baseModelSelect');
+  const retry=$('#retryModels');
+  const previous=select.value;
+  state.modelsLoading=true;
+  select.disabled=true;
+  retry.hidden=true;
+  if(!state.modelsLoaded)select.innerHTML='<option value="">Loading models…</option>';
   try{
     const d=await api('/api/v1/models');
-    state.modelFamilies.clear();
+    const families=new Map();
 
     for(const m of d.models||[]){
       const label=m.label||'';
@@ -615,23 +762,41 @@ async function loadModels(){
       const baseName=(match?match[1]:label).trim();
       const intensity=(match&&match[2]?match[2].toLowerCase():'default');
 
-      if(!state.modelFamilies.has(baseName)){
-        state.modelFamilies.set(baseName,{
+      if(!baseName)continue;
+      if(!families.has(baseName)){
+        families.set(baseName,{
           name:baseName,
           models:{},
           quota:m.quota
         });
       }
-      const fam=state.modelFamilies.get(baseName);
+      const fam=families.get(baseName);
       fam.models[intensity]=m.model;
       if(!fam.models.default)fam.models.default=m.model;
     }
 
-    const select=$('#baseModelSelect');
+    if(!families.size)throw new Error('No models returned');
+    state.modelFamilies=families;
     select.innerHTML='<option value="">Default model</option>'+
       [...state.modelFamilies.keys()].map(name=>`<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
-  }catch{}
+    if(previous&&state.modelFamilies.has(previous))select.value=previous;
+    state.modelsLoaded=true;
+    state.nextModelRetryAt=0;
+    select.title=`${state.modelFamilies.size} models available`;
+  }catch(err){
+    state.nextModelRetryAt=Date.now()+5000;
+    select.title=`Model loading failed: ${err.message}`;
+    if(!state.modelsLoaded){
+      select.innerHTML='<option value="">Models unavailable</option>';
+      retry.hidden=false;
+    }
+  }finally{
+    state.modelsLoading=false;
+    select.disabled=false;
+  }
 }
+
+$('#retryModels').onclick=()=>loadModels({force:true});
 
 function getSelectedModel(){
   const base=$('#baseModelSelect').value;
@@ -657,25 +822,45 @@ function formatWorkspace(wsUri=''){
   return parts.slice(-2).join('/')||parts[0]||'';
 }
 
-async function loadConversations(){
+async function loadConversations({ force = false } = {}){
   if(!state.token){
     $('#conversationList').innerHTML='<div class="empty-hint" style="padding: 20px 14px; text-align: center; color: var(--muted); font-size: 13px;"><p style="margin-bottom:10px;">⚠️ Device not paired</p><button type="button" class="primary-btn-sm" onclick="$(\'#tokenBtn\').click()">Enter Token</button></div>';
     return;
   }
+  const requestId=++state.conversationRequest;
+  const list=$('#conversationList');
+  const refresh=$('#refreshConversations');
+  const hadConversations=Boolean(list.querySelector('.conversation'));
+  list.setAttribute('aria-busy','true');
+  refresh.disabled=true;
+  if(!hadConversations){
+    list.innerHTML='<div class="list-state loading-state"><span class="loading-indicator"></span><strong>Loading conversations</strong><small>Connecting to Antigravity…</small></div>';
+  }
   try{
-    const d=await api('/api/v1/conversations');
+    const d=await api(`/api/v1/conversations${force?'?force=1':''}`);
+    if(requestId!==state.conversationRequest)return;
     const filterWs=$('#workspaceSelect')?.value||'';
     const allConvs=d.conversations||[];
+    for(const conversation of allConvs)if(conversation.id)state.conversationTitles.set(conversation.id,conversation.title||'Untitled');
     const convs=allConvs.filter(c=>{
       if(!filterWs)return true;
       return c.workspace&&(c.workspace===filterWs||c.workspace.includes(filterWs)||filterWs.includes(c.workspace));
     });
 
+    const meta=d.meta||{};
+    const notice=meta.stale
+      ? '<div class="list-notice warning">Showing the last successful result. Antigravity is reconnecting.</div>'
+      : (meta.partial?`<div class="list-notice warning">Some Language Servers did not respond (${meta.failedInstances||0}/${meta.instanceCount||0}).</div>`:'');
+
     if(!convs.length){
-      $('#conversationList').innerHTML='<div class="empty-hint" style="padding: 20px 14px; text-align: center; color: var(--muted); font-size: 13px;">No conversations found.<br/>Click ＋ New to start.</div>';
+      const unavailable=meta.unavailable
+        ? '<strong>Conversations unavailable</strong><small>Antigravity did not respond. Try again in a moment.</small>'
+        : '<strong>No conversations found</strong><small>Create a conversation to get started.</small>';
+      list.innerHTML=`${notice}<div class="list-state">${unavailable}<button type="button" class="ghost-btn-sm" data-retry-conversations>Retry</button></div>`;
+      list.querySelector('[data-retry-conversations]')?.addEventListener('click',loadConversations);
       return;
     }
-    $('#conversationList').innerHTML=convs.map(c=>{
+    list.innerHTML=notice+convs.map(c=>{
       const wsDisplay=formatWorkspace(c.workspace);
       return `<div class="conversation ${c.id===state.conversationId?'active':''}" data-id="${escapeHtml(c.id)}">
         <strong class="conv-title">${escapeHtml(c.title||'Untitled')}</strong>
@@ -691,7 +876,14 @@ async function loadConversations(){
       toggleDrawer(false);
     });
   }catch(err){
-    $('#conversationList').innerHTML=`<div class="empty-hint" style="padding: 20px 14px; text-align: center; color: #ff9aa7; font-size: 13px;"><p style="margin-bottom:10px;">${escapeHtml(err.message||'Failed to load')}</p><button type="button" class="primary-btn-sm" onclick="$(\'#tokenBtn\').click()">Re-enter Token</button></div>`;
+    if(requestId!==state.conversationRequest)return;
+    list.innerHTML=`<div class="list-state error-state"><strong>Could not load conversations</strong><small>${escapeHtml(err.message||'Antigravity did not respond.')}</small><button type="button" class="ghost-btn-sm" data-retry-conversations>Retry</button></div>`;
+    list.querySelector('[data-retry-conversations]')?.addEventListener('click',loadConversations);
+  }finally{
+    if(requestId===state.conversationRequest){
+      list.removeAttribute('aria-busy');
+      refresh.disabled=false;
+    }
   }
 }
 
@@ -700,13 +892,16 @@ async function openConversation(id){
     if(state.conversationId&&state.conversationId!==id)unsubscribe('conversation',state.conversationId);
     state.conversationId=id;
     state.events.clear();
+    const listedTitle=state.conversationTitles.get(id)
+      ||document.querySelector(`.conversation[data-id="${CSS.escape(id)}"] .conv-title`)?.textContent;
+    state.conversationTitle=listedTitle||id.slice(0,12);
+    $('#convTitle').textContent=state.conversationTitle;
     const d=await api(`/api/v1/conversations/${encodeURIComponent(id)}`);
     for(const e of d.events||[])state.events.set(eventKey(e),e);
-    $('#convTitle').textContent=id.slice(0,12);
     $('#convSub').textContent=`Live state · ${(d.events||[]).length} events`;
     $('#promptInput').disabled=false;
     $('#sendBtn').disabled=false;
-    renderTimeline();
+    renderTimeline({forceScroll:true,animateNew:false});
     subscribe('conversation',id);
     loadConversations();
   }catch(e){
@@ -806,7 +1001,7 @@ $('#tokenBtn').onclick=()=>{
   }
 };
 
-$('#refreshConversations').onclick=loadConversations;
+$('#refreshConversations').onclick=()=>loadConversations({force:true});
 $('#newConversation').onclick=async()=>{
   try{
     const d=await api('/api/v1/conversations',{
@@ -989,6 +1184,7 @@ async function boot(){
     window._stateRefresher=setInterval(()=>{
       if(state.token){
         loadStatus();
+        if(!state.modelsLoaded&&!state.modelsLoading)loadModels();
       }
     },3000);
   }

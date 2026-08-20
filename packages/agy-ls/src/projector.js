@@ -174,16 +174,50 @@ export function projectStep(step, stepIndex, context = {}) {
   if (step.codeAction) {
     events.push({
       type: 'tool.file', ...base,
-      action: 'code_action',
+      action: 'edit',
       fileUri: actionFile(step.codeAction),
       description: step.codeAction.description,
     });
   }
-  if (step.viewFile) events.push({ type: 'tool.file', ...base, action: 'view', fileUri: step.viewFile.absoluteUri });
-  if (step.listDirectory) events.push({ type: 'tool.file', ...base, action: 'list', fileUri: step.listDirectory.path || step.listDirectory.absoluteUri });
-  if (step.grepSearch) events.push({ type: 'tool.search', ...base, action: 'grep', query: step.grepSearch.query || step.grepSearch.searchPattern });
-  if (step.find) events.push({ type: 'tool.search', ...base, action: 'find', query: step.find.pattern, directory: step.find.searchDirectory });
-  if (step.searchWeb) events.push({ type: 'tool.search', ...base, action: 'web', query: step.searchWeb.query });
+  if (step.viewFile) {
+    events.push({
+      type: 'tool.file', ...base,
+      action: 'view',
+      fileUri: step.viewFile.absoluteUri || step.viewFile.filePath || step.viewFile.path,
+      startLine: step.viewFile.startLine ?? step.viewFile.start_line,
+      endLine: step.viewFile.endLine ?? step.viewFile.end_line,
+    });
+  }
+  if (step.listDirectory) {
+    events.push({
+      type: 'tool.file', ...base,
+      action: 'list',
+      fileUri: step.listDirectory.path || step.listDirectory.absoluteUri || step.listDirectory.directoryPath,
+    });
+  }
+  if (step.grepSearch) {
+    events.push({
+      type: 'tool.search', ...base,
+      action: 'grep',
+      query: step.grepSearch.query || step.grepSearch.searchPattern,
+      path: step.grepSearch.searchPath || step.grepSearch.path,
+    });
+  }
+  if (step.find) {
+    events.push({
+      type: 'tool.search', ...base,
+      action: 'find',
+      query: step.find.pattern,
+      directory: step.find.searchDirectory,
+    });
+  }
+  if (step.searchWeb) {
+    events.push({
+      type: 'tool.search', ...base,
+      action: 'web',
+      query: step.searchWeb.query,
+    });
+  }
 
   const browser = browserStep(step, stepIndex);
   if (browser) events.push(browser);

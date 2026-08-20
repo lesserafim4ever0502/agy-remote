@@ -177,7 +177,7 @@ async function api(req, res, url) {
 
   // Status & Health
   if (method === "GET" && pathname === "/api/v1/status") {
-    const instances = await agy.router.refresh();
+    const instances = await agy.router.refresh({ maxAgeMs: 10000 });
     const capabilities = await agy.capabilities.probe();
     const tsHealth = await ts.health();
     return sendJson(res, 200, {
@@ -208,7 +208,9 @@ async function api(req, res, url) {
 
   // Conversations
   if (method === "GET" && pathname === "/api/v1/conversations") {
-    return sendJson(res, 200, { conversations: await agy.conversations.list() });
+    const force = url.searchParams.has("force") || req.headers["cache-control"] === "no-cache";
+    const conversations = await agy.conversations.list({ force, maxAgeMs: force ? 0 : 1500 });
+    return sendJson(res, 200, { conversations, meta: agy.conversations.getListMeta() });
   }
   if (method === "POST" && pathname === "/api/v1/conversations") {
     const body = await readJson(req);

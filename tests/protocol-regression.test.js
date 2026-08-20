@@ -285,3 +285,40 @@ test("12. browser screenshot normalizes response data and mimeType", async () =>
   assert.equal(result.mimeType, "image/jpeg");
   assert.ok(result.raw);
 });
+
+test("13. conversation listing coalesces concurrent requests and keeps the last successful result", async () => {
+  let calls = 0;
+  let failing = false;
+  const instances = [{ port: 1001 }, { port: 1002 }];
+  const mockTransport = {
+    unary: async (instance) => {
+      calls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (failing) throw new Error("Language Server unavailable");
+      return {
+        trajectorySummaries: [{
+          key: `conv-${instance.port}`,
+          value: { summary: `Conversation ${instance.port}`, stepCount: 1 },
+        }],
+      };
+    },
+  };
+  const mockRouter = {
+    instances,
+    ensure: async () => instances,
+    pinConversation() {},
+  };
+  const service = new ConversationService({ transport: mockTransport, router: mockRouter, logger: { warn() {} } });
+
+  const [first, concurrent] = await Promise.all([service.list(), service.list()]);
+  assert.equal(calls, 2);
+  assert.deepEqual(concurrent, first);
+  assert.equal(first.length, 2);
+  assert.equal(service.getListMeta().stale, false);
+
+  failing = true;
+  const cached = await service.list();
+  assert.deepEqual(cached, first);
+  assert.equal(service.getListMeta().stale, true);
+  assert.equal(service.getListMeta().failedInstances, 2);
+});

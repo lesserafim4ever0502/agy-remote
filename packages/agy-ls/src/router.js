@@ -23,9 +23,11 @@ export class AgyRouter {
     this.refreshPromise = (async () => {
       const discovered = await discoverLanguageServers(this.transport, { logger: this.logger });
       if (discovered.length === 0) {
-        this.instances = [];
-        this.ownerMap.clear();
         this.lastRefreshAt = Date.now();
+        if (this.instances.length) {
+          this.logger.warn?.('[router] discovery returned no instances; keeping last known Language Server routes');
+          return this.instances;
+        }
         throw new Error('No reachable Antigravity Language Server found');
       }
       this.instances = discovered;

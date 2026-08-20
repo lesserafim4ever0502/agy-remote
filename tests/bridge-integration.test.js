@@ -147,6 +147,7 @@ test("bridge boots against a mock Language Server and exposes authenticated API 
   const body = await conversations.json();
   assert.equal(body.conversations[0].id, "c1");
   assert.equal(body.conversations[0].title, "Demo");
+  assert.equal(body.meta.stale, false);
 
   // 4. WebSocket with One-Time Ticket
   const ticketResp = await fetch(`http://127.0.0.1:${bridgePort}/api/v1/auth/ws-ticket`, {

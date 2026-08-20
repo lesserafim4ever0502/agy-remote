@@ -31,10 +31,14 @@ export class ConversationService {
     this.models = models;
     this.listPromise = null;
     this.cachedList = [];
+    this.lastSuccessAt = 0;
     this.listMeta = { stale: false, partial: false, failedInstances: 0, instanceCount: 0 };
   }
 
-  async list() {
+  async list({ force = false, maxAgeMs = 0 } = {}) {
+    if (!force && maxAgeMs > 0 && this.cachedList.length > 0 && (Date.now() - this.lastSuccessAt < maxAgeMs)) {
+      return this.cachedList;
+    }
     if (this.listPromise) return this.listPromise;
     this.listPromise = this.#list();
     try {
@@ -88,7 +92,10 @@ export class ConversationService {
       failedInstances: failed,
       instanceCount,
     };
-    if (succeeded > 0) this.cachedList = conversations;
+    if (succeeded > 0) {
+      this.lastSuccessAt = Date.now();
+      this.cachedList = conversations;
+    }
     return conversations;
   }
 

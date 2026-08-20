@@ -2,9 +2,26 @@ export class CapabilityService {
   constructor({ transport, router }) {
     this.transport = transport;
     this.router = router;
+    this.cached = null;
+    this.cachedAt = 0;
+    this.probePromise = null;
   }
 
-  async probe() {
+  async probe({ maxAgeMs = 30000 } = {}) {
+    if (this.cached && Date.now() - this.cachedAt < maxAgeMs) return this.cached;
+    if (this.probePromise) return this.probePromise;
+
+    this.probePromise = this.#probe();
+    try {
+      this.cached = await this.probePromise;
+      this.cachedAt = Date.now();
+      return this.cached;
+    } finally {
+      this.probePromise = null;
+    }
+  }
+
+  async #probe() {
     await this.router.ensure();
     const instance = this.router.instances[0];
     const capabilities = {

@@ -77,11 +77,18 @@ function runPowerShell(scriptText, timeout = 10000) {
 function scanProcesses() {
   const rows = [];
   if (process.platform === 'win32') {
-    const script = "Get-CimInstance Win32_Process | ForEach-Object { if ($_.Name -like '*language_server*' -or $_.CommandLine -like '*language_server*') { [PSCustomObject]@{ ProcessId = $_.ProcessId; CommandLine = $_.CommandLine } } } | ConvertTo-Json -Compress";
-    const parsed = runPowerShell(script, 10000);
+    const script = "$procs = Get-CimInstance Win32_Process -Filter \"Name LIKE '%language_server%'\" | Select-Object ProcessId, CommandLine; $res = @(); foreach ($p in $procs) { $ports = Get-NetTCPConnection -OwningProcess $p.ProcessId -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty LocalPort; $res += @{ pid = $p.ProcessId; command = $p.CommandLine; ports = @($ports) } }; $res | ConvertTo-Json -Compress -Depth 3";
+    const parsed = runPowerShell(script, 8000);
     if (parsed) {
       for (const item of Array.isArray(parsed) ? parsed : [parsed]) {
-        if (item && item.ProcessId) rows.push({ pid: Number(item.ProcessId), command: item.CommandLine || '' });
+        if (item && item.pid) {
+          const rawPorts = Array.isArray(item.ports) ? item.ports : (item.ports ? [item.ports] : []);
+          rows.push({
+            pid: Number(item.pid),
+            command: item.command || '',
+            ports: rawPorts.map(Number).filter((p) => p > 0),
+          });
+        }
       }
     }
   } else {
@@ -90,7 +97,7 @@ function scanProcesses() {
       for (const line of result.stdout.split(/\r?\n/)) {
         if (!line.includes('language_server')) continue;
         const match = line.trim().match(/^(\d+)\s+(.*)$/);
-        if (match) rows.push({ pid: Number(match[1]), command: match[2] });
+        if (match) rows.push({ pid: Number(match[1]), command: match[2], ports: [] });
       }
     }
   }
@@ -101,7 +108,7 @@ function listeningPorts(pid) {
   const ports = new Set();
   if (process.platform === 'win32') {
     const script = `Get-NetTCPConnection -OwningProcess ${Number(pid)} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty LocalPort | ConvertTo-Json -Compress`;
-    const parsed = runPowerShell(script, 8000);
+    const parsed = runPowerShell(script, 5000);
     if (parsed) {
       for (const port of Array.isArray(parsed) ? parsed : [parsed]) if (Number(port) > 0) ports.add(Number(port));
     }
@@ -129,7 +136,11 @@ function processInstances() {
     const ports = new Set();
     if (declaredHttps > 0) ports.add(declaredHttps);
     if (declaredHttp > 0) ports.add(declaredHttp);
-    if (ports.size === 0) for (const port of listeningPorts(row.pid)) ports.add(port);
+    if (Array.isArray(row.ports) && row.ports.length > 0) {
+      for (const p of row.ports) ports.add(p);
+    } else if (ports.size === 0) {
+      for (const port of listeningPorts(row.pid)) ports.add(port);
+    }
     for (const port of ports) {
       const proto = (declaredHttps > 0 && port === declaredHttps)
         ? 'https'
@@ -176,27 +187,36 @@ function dedupe(instances) {
 
 export async function discoverLanguageServers(transport, { logger = console } = {}) {
   const forced = manualInstance();
-  let candidates = forced ? [forced] : [...readDaemonFiles(), ...processInstances()];
-  candidates = dedupe(candidates);
+  const probe = async (candidates) => {
+    const probed = await Promise.all(dedupe(candidates).map(async (instance) => {
+      try {
+        const response = await transport.unary(instance, 'GetWorkspaceInfos', {}, { timeoutMs: 5000 });
+        instance.workspaceUris = (response.workspaceInfos || response.workspace_infos || [])
+          .map((info) => info.workspaceUri || info.workspace_uri)
+          .filter(Boolean);
+        instance.homeDirPath = response.homeDirPath || response.home_dir_path;
+        await transport.unary(instance, 'GetAllCascadeTrajectories', { excludeSubtrajectories: false }, { timeoutMs: 5000 });
+        return instance;
+      } catch (error) {
+        logger.debug?.(`[discovery] rejected ${JSON.stringify(redactInstance(instance))}: ${error.message}`);
+        return null;
+      }
+    }));
 
-  const valid = [];
-  const seenPids = new Set();
-  for (const instance of candidates) {
-    if (instance.pid > 0 && seenPids.has(instance.pid)) continue;
-    try {
-      const response = await transport.unary(instance, 'GetWorkspaceInfos', {}, { timeoutMs: 5000 });
-      instance.workspaceUris = (response.workspaceInfos || response.workspace_infos || [])
-        .map((info) => info.workspaceUri || info.workspace_uri)
-        .filter(Boolean);
-      instance.homeDirPath = response.homeDirPath || response.home_dir_path;
-      
-      // Verify GetAllCascadeTrajectories works
-      await transport.unary(instance, 'GetAllCascadeTrajectories', { excludeSubtrajectories: false }, { timeoutMs: 5000 });
-      valid.push(instance);
+    const seenPids = new Set();
+    return probed.filter((instance) => {
+      if (!instance) return false;
+      if (instance.pid > 0 && seenPids.has(instance.pid)) return false;
       if (instance.pid > 0) seenPids.add(instance.pid);
-    } catch (error) {
-      logger.debug?.(`[discovery] rejected ${JSON.stringify(redactInstance(instance))}: ${error.message}`);
-    }
-  }
-  return valid;
+      return true;
+    });
+  };
+
+  if (forced) return probe([forced]);
+
+  // Daemon files are fast and normally authoritative. Process scanning is a
+  // slower fallback and may be permission-blocked on managed Windows systems.
+  const fromDaemon = await probe(readDaemonFiles());
+  if (fromDaemon.length || !boolEnv('AGY_DISCOVERY_PROCESS_SCAN', true)) return fromDaemon;
+  return probe(processInstances());
 }

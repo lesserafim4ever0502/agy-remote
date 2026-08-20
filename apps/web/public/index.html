@@ -7,7 +7,7 @@
   <title>Agy Remote</title>
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/styles.css?v=1.1.0" />
+  <link rel="stylesheet" href="/styles.css?v=1.3.0" />
 </head>
 <body>
   <div id="drawerBackdrop" class="drawer-backdrop"></div>
@@ -68,7 +68,10 @@
           <div id="timeline" class="timeline empty">Select a conversation from the workspace to begin.</div>
           <form id="composer" class="composer">
             <div class="model-bar">
-              <select id="baseModelSelect" title="Select Model"><option value="">Default model</option></select>
+              <div class="model-select-wrap">
+                <select id="baseModelSelect" title="Select model"><option value="">Default model</option></select>
+                <button id="retryModels" class="model-retry" type="button" hidden>Retry</button>
+              </div>
               <div class="thinking-selector" id="thinkingSelector">
                 <span class="thinking-label" title="Thinking budget">Thinking</span>
                 <div class="segmented-control" id="thinkingSegmented">
@@ -132,6 +135,6 @@
   </div>
 
   <div id="toast" class="toast"></div>
-  <script type="module" src="/app.js?v=1.1.0"></script>
+  <script type="module" src="/app.js?v=1.3.0"></script>
 </body>
 </html>
