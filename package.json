@@ -5,19 +5,19 @@
   "type": "module",
   "description": "Zero-dependency local bridge + PWA for remotely controlling Antigravity through its local LanguageServerService.",
   "scripts": {
-    "start": "node apps/bridge/src/server.js",
-    "dev": "node --watch apps/bridge/src/server.js",
-    "remote:setup": "node scripts/remote-setup.mjs",
-    "remote:start": "powershell -ExecutionPolicy Bypass -File scripts/start-background.ps1",
+    "start": "node scripts/start.mjs",
+    "dev": "node --watch scripts/start.mjs",
+    "remote:start": "node scripts/start.mjs",
+    "remote:setup": "node scripts/start.mjs",
     "remote:status": "node scripts/doctor.mjs",
     "remote:stop": "powershell -ExecutionPolicy Bypass -File scripts/stop-background.ps1",
-    "test": "node --test tests/*.test.js",
-    "smoke": "node scripts/smoke.mjs",
-    "doctor": "node scripts/doctor.mjs",
-    "probe": "node scripts/read-only-probe.mjs",
-    "capture-fixtures": "node scripts/capture-fixtures.mjs",
     "start:bg": "powershell -ExecutionPolicy Bypass -File scripts/start-background.ps1",
-    "stop:bg": "powershell -ExecutionPolicy Bypass -File scripts/stop-background.ps1"
+    "stop:bg": "powershell -ExecutionPolicy Bypass -File scripts/stop-background.ps1",
+    "test": "node --test tests/*.test.js",
+    "doctor": "node scripts/doctor.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "probe": "node scripts/read-only-probe.mjs",
+    "capture-fixtures": "node scripts/capture-fixtures.mjs"
   },
   "engines": {
     "node": ">=22.0.0"
