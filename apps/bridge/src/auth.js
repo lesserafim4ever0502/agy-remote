@@ -8,8 +8,8 @@ import { boolEnv } from "../../../packages/agy-ls/src/utils.js";
 const INACTIVE_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
 const ABSOLUTE_TTL_MS = 365 * 24 * 60 * 60 * 1000; // 365 days max
 
-function getStorageDir() {
-  const dir = path.join(os.homedir(), ".agy-remote");
+export function getStorageDir() {
+  const dir = process.env.AGY_REMOTE_STATE_DIR || path.join(os.homedir(), ".agy-remote");
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   return dir;
 }

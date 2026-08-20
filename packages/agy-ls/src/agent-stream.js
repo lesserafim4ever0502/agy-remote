@@ -1,7 +1,7 @@
-import { randomUUID } from 'node:crypto';
-import { mergeStepsUpdate, changedIndices } from './step-merger.js';
-import { projectStep } from './projector.js';
-import { normalizeStatus } from './utils.js';
+import { randomUUID } from "node:crypto";
+import { mergeStepsUpdate, changedIndices } from "./step-merger.js";
+import { projectStep } from "./projector.js";
+import { normalizeStatus } from "./utils.js";
 
 export class AgentStreamManager {
   constructor({ transport, router, logger = console }) {
@@ -11,13 +11,20 @@ export class AgentStreamManager {
     this.entries = new Map();
   }
 
-  subscribe(conversationId, listener) {
+  isSubscribed(conversationId) {
+    const entry = this.entries.get(conversationId);
+    return Boolean(entry && !entry.stopped);
+  }
+
+  subscribe(conversationId, listener, options = {}) {
     let entry = this.entries.get(conversationId);
     if (!entry) {
       entry = {
         conversationId,
-        state: { conversationId, steps: [], status: 'unknown', totalLength: 0 },
+        state: { conversationId, steps: [], status: "unknown", totalLength: 0 },
         listeners: new Set(),
+        closeHooks: new Set(),
+        errorHooks: new Set(),
         controller: null,
         reconnectTimer: null,
         stopped: false,
@@ -27,10 +34,15 @@ export class AgentStreamManager {
       this.#open(entry).catch((error) => this.#streamError(entry, error));
     }
     entry.listeners.add(listener);
-    listener({ type: 'conversation.state', state: this.publicState(entry.state) });
+    if (options.onClose) entry.closeHooks.add(options.onClose);
+    if (options.onError) entry.errorHooks.add(options.onError);
+
+    listener({ type: "conversation.state", state: this.publicState(entry.state) });
 
     return () => {
       entry.listeners.delete(listener);
+      if (options.onClose) entry.closeHooks.delete(options.onClose);
+      if (options.onError) entry.errorHooks.delete(options.onError);
       if (entry.listeners.size === 0) this.#close(entry);
     };
   }
@@ -61,13 +73,13 @@ export class AgentStreamManager {
       conversationId: entry.conversationId,
       subscriberId,
       initialStepsPageBounds: { startIndex: 0, endIndexExclusive: 10000 },
-      trajectoryVerbosity: 'CLIENT_TRAJECTORY_VERBOSITY_PROD_UI',
+      trajectoryVerbosity: "CLIENT_TRAJECTORY_VERBOSITY_PROD_UI",
     };
-    entry.controller = this.transport.stream(instance, 'StreamAgentStateUpdates', body, {
+    entry.controller = this.transport.stream(instance, "StreamAgentStateUpdates", body, {
       onOpen: () => { entry.reconnectAttempt = 0; },
       onMessage: (message) => this.#apply(entry, message?.update || message),
       onError: (error) => this.#streamError(entry, error),
-      onEnd: () => this.#streamError(entry, new Error('agent state stream ended')),
+      onEnd: () => this.#streamError(entry, new Error("agent state stream ended")),
     });
   }
 
@@ -95,13 +107,13 @@ export class AgentStreamManager {
       }
     }
 
-    this.#emit(entry, { type: 'conversation.state', state: this.publicState(state) });
+    this.#emit(entry, { type: "conversation.state", state: this.publicState(state) });
     for (const event of projected) this.#emit(entry, event);
   }
 
   #emit(entry, payload) {
     for (const listener of entry.listeners) {
-      try { listener(payload); } catch (error) { this.logger.error?.('[agent-stream] listener error', error); }
+      try { listener(payload); } catch (error) { this.logger.error?.("[agent-stream] listener error", error); }
     }
   }
 
@@ -109,8 +121,13 @@ export class AgentStreamManager {
     if (entry.stopped || entry.listeners.size === 0) return;
     this.logger.warn?.(`[agent-stream] ${entry.conversationId}: ${error.message}`);
     entry.controller?.abort();
-    if (String(error.message || '').includes('not found') || error.statusCode === 404 || entry.reconnectAttempt >= 5) {
-      this.#close(entry);
+
+    for (const hook of entry.errorHooks) {
+      try { hook(error, entry.conversationId); } catch {}
+    }
+
+    if (String(error.message || "").includes("not found") || error.statusCode === 404 || entry.reconnectAttempt >= 5) {
+      this.#close(entry, error);
       return;
     }
     if (entry.reconnectTimer) return;
@@ -123,10 +140,13 @@ export class AgentStreamManager {
     entry.reconnectTimer.unref?.();
   }
 
-  #close(entry) {
+  #close(entry, error) {
     entry.stopped = true;
     entry.controller?.abort();
     if (entry.reconnectTimer) clearTimeout(entry.reconnectTimer);
     this.entries.delete(entry.conversationId);
+    for (const hook of entry.closeHooks) {
+      try { hook(entry.conversationId, error); } catch {}
+    }
   }
 }

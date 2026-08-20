@@ -326,7 +326,7 @@ async function api(req, res, url) {
     return sendJson(res, 200, { logs: await agy.browser.consoleLogs(pageId) });
   }
 
-  return sendError(res, 404, `Not Found: ${method} ${pathname}`);
+  return sendJson(res, 404, { error: "not_found", message: `Not Found: ${method} ${pathname}` });
 }
 
 export const server = http.createServer(async (req, res) => {
@@ -342,7 +342,7 @@ export const server = http.createServer(async (req, res) => {
     if (serveStatic(url.pathname, res)) return;
     return sendJson(res, 404, { error: "not_found", message: `Static file not found: ${url.pathname}` });
   } catch (error) {
-    sendError(res, 500, error.message);
+    sendError(res, error);
   }
 });
 

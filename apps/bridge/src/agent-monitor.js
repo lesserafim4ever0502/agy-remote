@@ -5,10 +5,11 @@ const IDLE_POLL_INTERVAL_MS = 15000;  // 15s when all conversations are idle
 const IDLE_DETACH_GRACE_MS = 30000;   // Keep stream attached 30s after IDLE
 
 export class AgentMonitor {
-  constructor({ agy, hub, logger = console }) {
+  constructor({ agy, hub, logger = console, pushSender = sendPushNotification }) {
     this.agy = agy;
     this.hub = hub;
     this.logger = logger;
+    this.pushSender = pushSender;
 
     this.monitored = new Map(); // conversationId -> { stop: fn, lastActiveAt: number, status: string }
     this.pushedKeys = new Map(); // pushKey -> { conversationId, trajectoryId, stepIndex, kind, timestamp }
@@ -44,7 +45,10 @@ export class AgentMonitor {
 
   scheduleNextPoll(delayMs) {
     if (!this.running) return;
-    if (this.pollTimer) clearTimeout(this.pollTimer);
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = null;
+    }
 
     const interval = delayMs || (this.activeConversations.size > 0 ? ACTIVE_POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS);
     this.pollTimer = setTimeout(async () => {
@@ -71,6 +75,15 @@ export class AgentMonitor {
         const id = conv.id || conv.cascadeId;
         const status = String(conv.status || "").toLowerCase();
         const isActive = status === "running" || status === "waiting" || status.includes("waiting");
+
+        // Verify that existing monitored entries are genuinely subscribed at the LS layer
+        if (this.monitored.has(id)) {
+          const isAlive = this.agy.streams?.isSubscribed?.(id) ?? true;
+          if (!isAlive) {
+            this.logger.warn?.(`[AgentMonitor] Detected stale dead stream for ${id.slice(0, 10)}. Evicting to re-subscribe.`);
+            this.monitored.delete(id);
+          }
+        }
 
         if (isActive) {
           currentActive.add(id);
@@ -106,13 +119,30 @@ export class AgentMonitor {
   }
 
   ensureMonitored(conversationId) {
-    if (!conversationId || this.monitored.has(conversationId)) return;
+    if (!conversationId) return;
+
+    // Check if genuinely active
+    if (this.monitored.has(conversationId)) {
+      const isAlive = this.agy.streams?.isSubscribed?.(conversationId) ?? true;
+      if (isAlive) return;
+      this.monitored.delete(conversationId);
+    }
 
     this.logger.debug?.(`[AgentMonitor] Attaching persistent stream for conversation ${conversationId.slice(0, 10)}`);
 
-    const stopFn = this.agy.streams.subscribe(conversationId, (event) => {
-      this.handleStreamEvent(conversationId, event);
-    });
+    const stopFn = this.agy.streams.subscribe(
+      conversationId,
+      (event) => this.handleStreamEvent(conversationId, event),
+      {
+        onClose: (id) => {
+          this.monitored.delete(id);
+          this.logger.debug?.(`[AgentMonitor] Stream closed by LS layer for ${id.slice(0, 10)}. Removed from monitored map.`);
+        },
+        onError: (err, id) => {
+          this.logger.warn?.(`[AgentMonitor] Stream error for ${id.slice(0, 10)}: ${err.message}`);
+        },
+      }
+    );
 
     this.monitored.set(conversationId, {
       stop: stopFn,
@@ -174,7 +204,7 @@ export class AgentMonitor {
           ? `Action needed: ${event.interaction.kind}`
           : (event.text?.slice(0, 120) || "Agent is waiting for your response.");
 
-        sendPushNotification({
+        this.pushSender({
           title,
           body,
           data: {

@@ -1,6 +1,33 @@
+import { spawn } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { TailscaleManager } from "../apps/bridge/src/tailscale.js";
 import { loadOrCreateToken } from "../apps/bridge/src/auth.js";
 import { formatPairingTerminal, generatePairingQrFile } from "../apps/bridge/src/qr.js";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function isBridgeRunning(port = 7317) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/v1/ping`, { signal: AbortSignal.timeout(1500) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function startBridgeDaemon() {
+  return new Promise((resolve) => {
+    const ps = spawn("powershell", ["-ExecutionPolicy", "Bypass", "-File", "scripts/start-background.ps1"], {
+      cwd: root,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    ps.on("close", () => resolve());
+    ps.on("error", () => resolve());
+  });
+}
 
 async function fetchPairSecret(port = 7317) {
   const { token } = loadOrCreateToken();
@@ -10,6 +37,7 @@ async function fetchPairSecret(port = 7317) {
       "Authorization": `Bearer ${token}`,
       "Content-Type": "application/json",
     },
+    signal: AbortSignal.timeout(3000),
   }).catch(() => null);
 
   if (!res || !res.ok) return null;
@@ -52,43 +80,55 @@ async function main() {
     console.log("[✓] Tailscale Serve configured in background (--bg 7317).");
   }
 
-  // Request Pair Secret from the live Bridge server process
-  let secret = await fetchPairSecret(7317);
+  // Ensure Bridge is running
+  let running = await isBridgeRunning(7317);
+  if (!running) {
+    console.log("[*] Bridge is not running. Automatically starting background daemon...");
+    await startBridgeDaemon();
+    for (let i = 0; i < 20; i++) {
+      await wait(300);
+      if (await isBridgeRunning(7317)) {
+        running = true;
+        break;
+      }
+    }
+  }
+
+  if (!running) {
+    console.error("[!] Failed to start or reach Agy Remote bridge daemon on 127.0.0.1:7317.");
+    console.error("    Please check agy-remote.err.log or run `npm start` manually.\n");
+    process.exit(1);
+  }
+  console.log("[✓] Agy Remote Bridge daemon is active on 127.0.0.1:7317.");
+
+  const secret = await fetchPairSecret(7317);
   if (!secret) {
-    console.log("[*] Bridge is not currently running. Starting temporary daemon to generate pair secret...");
-    // If not running, inform user or start bridge
-    console.log("    Tip: Run `npm start` or `npm run remote:start` to launch the bridge, then run `npm run remote:setup`.");
-    console.log("    Generating standalone pairing URL for when bridge starts with master token...");
+    console.error("[!] Failed to obtain pairing secret from live Bridge process.");
+    process.exit(1);
   }
 
   const httpsUrl = await ts.getHttpsUrl();
   const targetBase = httpsUrl || "http://127.0.0.1:7317";
-  const pairUrl = secret ? `${targetBase}/#pair=${secret}` : `${targetBase}`;
+  const pairUrl = `${targetBase}/#pair=${secret}`;
 
   console.log("\n--------------------------------------------------");
   console.log(`Remote HTTPS Base:  ${httpsUrl || "http://127.0.0.1:7317 (local only)"}`);
-  if (secret) {
-    console.log(`Pairing URL (5m):   ${pairUrl}`);
-  } else {
-    console.log(`Base URL:           ${pairUrl}`);
-  }
+  console.log(`Pairing URL (5m):   ${pairUrl}`);
   console.log("--------------------------------------------------\n");
 
-  if (secret) {
-    try {
-      const qrFilePath = await generatePairingQrFile(pairUrl);
-      console.log(`[✓] Pairing QR image generated at:\n    ${qrFilePath}\n`);
-    } catch {}
+  try {
+    const qrFilePath = await generatePairingQrFile(pairUrl);
+    console.log(`[✓] Pairing QR image generated at:\n    ${qrFilePath}\n`);
+  } catch {}
 
-    try {
-      console.log("Scan with your mobile camera or browser:");
-      console.log(await formatPairingTerminal(pairUrl));
-    } catch {}
-  }
+  try {
+    console.log("Scan with your mobile camera or browser (One-Time Pairing):");
+    console.log(await formatPairingTerminal(pairUrl));
+  } catch {}
 
   console.log("\n==================================================");
   console.log("Security: Bridge binds 127.0.0.1 only. Tailscale handles WireGuard encryption & HTTPS.");
-  console.log("Ready. Start background daemon with: npm run remote:start\n");
+  console.log("Setup complete! Your remote PWA is ready for daily use.\n");
 }
 
 main().catch((err) => {

@@ -3,6 +3,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import http from "node:http";
+
+// Isolate test state in temporary directory so production ~/.agy-remote is NEVER touched
+const testStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "agy-test-state-"));
+process.env.AGY_REMOTE_STATE_DIR = testStateDir;
+
 import {
   assertSafeBind,
   createPairingSecret,
@@ -20,6 +26,7 @@ import {
 import { AgentMonitor } from "../apps/bridge/src/agent-monitor.js";
 import { EventHub } from "../apps/bridge/src/event-hub.js";
 import { TailscaleManager } from "../apps/bridge/src/tailscale.js";
+import { readJson, sendError } from "../apps/bridge/src/http-utils.js";
 
 test("1. assertSafeBind allows loopback by default and strictly rejects 0.0.0.0/public IPs", () => {
   assert.doesNotThrow(() => assertSafeBind("127.0.0.1"));
@@ -66,13 +73,13 @@ test("3. Pairing Secret lifecycle: 5min TTL, single-use, and exchange to Hashed 
   assert.throws(() => exchangePairingSecret(expSecret), /expired/);
 });
 
-test("4. Cold-start persistence test: memory wiped, sessions reloaded from sessions.json", () => {
+test("4. Cold-start persistence test: memory wiped, sessions reloaded from isolated sessions.json", () => {
   _resetSessionsForTest();
 
   const { secret } = createPairingSecret();
   const session = exchangePairingSecret(secret, "Pixel 9 Cold Start");
 
-  const sessionsFile = path.join(os.homedir(), ".agy-remote", "sessions.json");
+  const sessionsFile = path.join(testStateDir, "sessions.json");
   assert.ok(fs.existsSync(sessionsFile));
   const rawContent = fs.readFileSync(sessionsFile, "utf8");
   assert.ok(rawContent.includes(hashToken(session.token)), "File must contain hashed token");
@@ -100,7 +107,7 @@ test("5. Device Session sliding expiration and absolute TTL enforcement", () => 
   assert.equal(isAuthorized(req, new URL("http://127.0.0.1"), "master-token"), true);
 
   // Manually corrupt session to expired in file
-  const sessionsFile = path.join(os.homedir(), ".agy-remote", "sessions.json");
+  const sessionsFile = path.join(testStateDir, "sessions.json");
   const list = JSON.parse(fs.readFileSync(sessionsFile, "utf8"));
   const target = list.find((s) => s.id === session.id);
   if (target) {
@@ -139,13 +146,18 @@ test("7. One-time WebSocket Ticket expires in 30s and is consumed immediately", 
   assert.equal(consumeWsTicket(expTicket), false);
 });
 
-test("8. Realistic stream ordering: state(RUNNING) -> approval -> state(RUNNING) -> approval dedupe", async () => {
+test("8. Realistic stream ordering with Mock Push: state(RUNNING) -> approval -> state(RUNNING) -> approval dedupe", async () => {
   const hub = new EventHub();
   let pushCalls = [];
+  const mockPushSender = async (payload) => {
+    pushCalls.push(payload);
+    return { sent: 1, failed: 0, total: 1 };
+  };
 
   const mockAgy = {
     conversations: { list: async () => [{ id: "c-dedupe", status: "RUNNING" }] },
     streams: {
+      isSubscribed: () => true,
       subscribe: (id, onEvent) => {
         // Step 10: Initial state update
         onEvent({ type: "conversation.state", state: { status: "running" } });
@@ -171,13 +183,19 @@ test("8. Realistic stream ordering: state(RUNNING) -> approval -> state(RUNNING)
     router: { refresh: async () => [] },
   };
 
-  const monitor = new AgentMonitor({ agy: mockAgy, hub, logger: { info: () => {}, warn: () => {}, debug: () => {} } });
+  const monitor = new AgentMonitor({
+    agy: mockAgy,
+    hub,
+    logger: { info: () => {}, warn: () => {}, debug: () => {} },
+    pushSender: mockPushSender,
+  });
   await monitor.start();
 
   // Give stream time to process
   await new Promise((r) => setTimeout(r, 60));
 
-  // Exactly 1 dedupe key should be recorded for step 10
+  // Exactly 1 Push call was dispatched
+  assert.equal(pushCalls.length, 1, "Exactly one Push notification must be sent for step 10");
   assert.equal(monitor.pushedKeys.size, 1);
   assert.ok(monitor.pushedKeys.has("c-dedupe:traj-main:10:runCommand"));
 
@@ -195,38 +213,57 @@ test("8. Realistic stream ordering: state(RUNNING) -> approval -> state(RUNNING)
   monitor.stop();
 });
 
-test("9. AgentMonitor reconnects with exponential backoff on LS failure", async () => {
-  let listAttempts = 0;
-  let refreshCalled = false;
+test("9. AgentMonitor detects permanently closed stream, evicts stale entry, and re-subscribes on next reconcile", async () => {
+  let subscribeCount = 0;
+  let closeCallback = null;
 
-  const flakyAgy = {
-    conversations: {
-      list: async () => {
-        listAttempts += 1;
-        if (listAttempts === 1) throw new Error("Connection refused");
-        return [{ id: "c-rec", status: "RUNNING" }];
+  const mockAgy = {
+    conversations: { list: async () => [{ id: "c-evict", status: "RUNNING" }] },
+    streams: {
+      isSubscribed: () => subscribeCount > 1 || closeCallback === null,
+      subscribe: (id, onEvent, options = {}) => {
+        subscribeCount += 1;
+        closeCallback = options.onClose;
+        return () => {};
       },
     },
-    streams: { subscribe: () => () => {} },
-    router: { refresh: async () => { refreshCalled = true; return []; } },
+    router: { refresh: async () => [] },
   };
 
   const monitor = new AgentMonitor({
-    agy: flakyAgy,
+    agy: mockAgy,
     hub: new EventHub(),
     logger: { info: () => {}, warn: () => {}, debug: () => {} },
   });
-  
-  await monitor.reconcile(); // First attempt fails -> marks degraded
-  assert.equal(monitor.lsStatus, "degraded");
-  assert.ok(monitor.backoffMs > 2000);
 
-  await monitor.reconcile(); // Second attempt succeeds -> marks connected
-  assert.equal(monitor.lsStatus, "connected");
-  assert.equal(monitor.backoffMs, 2000);
+  await monitor.reconcile();
+  assert.equal(subscribeCount, 1);
+  assert.ok(monitor.monitored.has("c-evict"));
+
+  // Simulate underlying stream permanently dying (e.g. 5 retries / close)
+  closeCallback?.("c-evict", new Error("stream dead"));
+  assert.equal(monitor.monitored.has("c-evict"), false, "Stale entry must be evicted upon stream close");
+
+  // Next reconcile must re-subscribe cleanly
+  await monitor.reconcile();
+  assert.equal(subscribeCount, 2, "AgentMonitor must re-subscribe to running conversation after stream death");
+
+  monitor.stop();
 });
 
-test("10. TailscaleManager gracefully parses status JSON with fallback fields", async () => {
+test("10. readJson handles 400 Invalid JSON and 413 Payload Too Large correctly", async () => {
+  const invalidReq = (async function* () {
+    yield Buffer.from("{ invalid json");
+  })();
+  await assert.rejects(() => readJson(invalidReq), (err) => err.statusCode === 400);
+
+  const largeReq = (async function* () {
+    yield Buffer.alloc(100);
+  })();
+  await assert.rejects(() => readJson(largeReq, { limit: 50 }), (err) => err.statusCode === 413);
+});
+
+test("11. TailscaleManager gracefully parses status JSON with fallback fields", async () => {
   const ts = new TailscaleManager();
   const health = await ts.health();
   assert.ok("installed" in health);

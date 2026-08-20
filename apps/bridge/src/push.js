@@ -7,7 +7,7 @@ let vapidKeys = null;
 const subscriptions = new Map(); // endpoint -> subscriptionObj
 
 function getStorageDir() {
-  const dir = path.join(os.homedir(), ".agy-remote");
+  const dir = process.env.AGY_REMOTE_STATE_DIR || path.join(os.homedir(), ".agy-remote");
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   return dir;
 }

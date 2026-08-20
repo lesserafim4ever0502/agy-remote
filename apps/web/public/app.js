@@ -819,6 +819,28 @@ $('#openUrlForm').onsubmit=async(e)=>{
   }
 };
 
+async function checkDirectConversation(){
+  if(window.location.hash.startsWith('#conv=')){
+    const convId=window.location.hash.slice(6).trim();
+    if(convId){
+      try{
+        await openConversation(convId);
+        const agentTabBtn=document.querySelector('[data-tab="agent"]');
+        agentTabBtn?.click();
+        try{history.replaceState(null,'',window.location.pathname);}catch{}
+      }catch(e){
+        console.warn('[DeepLink error]',e.message);
+      }
+    }
+  }
+}
+
+window.addEventListener('hashchange',()=>{
+  if(window.location.hash.startsWith('#conv=')){
+    checkDirectConversation();
+  }
+});
+
 // Deterministic Boot Pipeline
 async function boot(){
   const paired=await checkPairing();
@@ -838,6 +860,8 @@ async function boot(){
     loadTerminals(),
     loadPages(),
   ]);
+
+  await checkDirectConversation();
 }
 
 boot();
