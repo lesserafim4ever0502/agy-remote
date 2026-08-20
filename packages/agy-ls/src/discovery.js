@@ -184,14 +184,14 @@ export async function discoverLanguageServers(transport, { logger = console } = 
   for (const instance of candidates) {
     if (instance.pid > 0 && seenPids.has(instance.pid)) continue;
     try {
-      const response = await transport.unary(instance, 'GetWorkspaceInfos', {}, { timeoutMs: 1500 });
+      const response = await transport.unary(instance, 'GetWorkspaceInfos', {}, { timeoutMs: 5000 });
       instance.workspaceUris = (response.workspaceInfos || response.workspace_infos || [])
         .map((info) => info.workspaceUri || info.workspace_uri)
         .filter(Boolean);
       instance.homeDirPath = response.homeDirPath || response.home_dir_path;
       
       // Verify GetAllCascadeTrajectories works
-      await transport.unary(instance, 'GetAllCascadeTrajectories', { excludeSubtrajectories: false }, { timeoutMs: 1500 });
+      await transport.unary(instance, 'GetAllCascadeTrajectories', { excludeSubtrajectories: false }, { timeoutMs: 5000 });
       valid.push(instance);
       if (instance.pid > 0) seenPids.add(instance.pid);
     } catch (error) {
