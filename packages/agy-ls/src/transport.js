@@ -184,7 +184,7 @@ export class ConnectTransport {
       request.end(envelope);
     };
 
-    const preferred = instance.protocol || 'https';
+    const preferred = instance.protocol || 'http';
     start([...new Set([preferred, preferred === 'https' ? 'http' : 'https'])]);
     return controller;
   }
